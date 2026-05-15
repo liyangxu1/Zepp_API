@@ -1,0 +1,2 @@
+# Optional dependency for stable AES implementation. If absent, script will尝试调用 openssl 命令回退。
+cryptography>=41.0.0
