@@ -1620,7 +1620,9 @@ def _simple_page_html() -> str:
       --primary-soft: #ecfeff;
       --blue: #2563eb;
       --success: #0f8f5f;
-      --danger: #c2410c;
+      --danger: #b91c1c;
+      --danger-soft: #fff1f2;
+      --danger-line: #fecdd3;
       --shadow: 0 16px 40px rgba(15, 23, 42, 0.07);
       --shadow-soft: 0 8px 18px rgba(15, 23, 42, 0.045);
     }
@@ -2039,6 +2041,18 @@ def _simple_page_html() -> str:
       line-height: 1.55;
     }
 
+    .qr-shield.qr-warning {
+      width: min(calc(100% - 28px), 320px);
+      min-height: 188px;
+      border: 1px solid var(--danger-line);
+      border-radius: 8px;
+      background: rgba(255, 241, 242, 0.96);
+      color: var(--danger);
+      font-size: 15px;
+      font-weight: 900;
+      box-shadow: 0 8px 18px rgba(185, 28, 28, 0.08);
+    }
+
     .device-qr {
       width: min(100%, 300px);
       aspect-ratio: 1 / 1;
@@ -2067,13 +2081,14 @@ def _simple_page_html() -> str:
 
     .qr-status.success { color: var(--success); }
     .qr-status.failed { color: var(--danger); }
+    .qr-status.warning { color: var(--danger); }
 
     .qr-confirm-panel {
       display: grid;
       gap: 10px;
-      border: 1px solid #fecaca;
+      border: 1px solid var(--danger-line);
       border-radius: 8px;
-      background: #fff7ed;
+      background: var(--danger-soft);
       padding: 12px;
     }
 
@@ -2085,7 +2100,7 @@ def _simple_page_html() -> str:
       display: flex;
       align-items: flex-start;
       gap: 8px;
-      color: var(--text);
+      color: var(--danger);
       font-size: 13px;
       font-weight: 800;
       line-height: 1.55;
@@ -2094,6 +2109,12 @@ def _simple_page_html() -> str:
     .qr-confirm-check input {
       margin-top: 3px;
       flex: 0 0 auto;
+      accent-color: var(--danger);
+    }
+
+    .danger-text {
+      color: var(--danger);
+      font-weight: 900;
     }
 
     .qr-rules {
@@ -2883,7 +2904,7 @@ def _simple_page_html() -> str:
                     <li>先点击 <strong>显示二维码</strong> 获取临时二维码，用微信扫码进入服务号页面。</li>
                     <li>按微信页面提示关注服务号；关注完成后回到本站，填写想同步的步数。</li>
                     <li>点击 <strong>我已关注，开始同步</strong>。后台会使用系统默认共享账号提交“填写步数 + 1”，刷新一次新的步数数据，让微信运动重新拉取同步状态。</li>
-                    <li>提交完成后查看微信运动是否同步成功；如果已经同步成功，<strong>必须取关刚才关注的华米服务号</strong>，否则后续可能无法继续修改或同步步数，再刷新微信运动确认排行榜步数。</li>
+                    <li>提交完成后查看微信运动是否同步成功；如果已经同步成功，<strong class="danger-text">必须取关刚才关注的华米服务号</strong>，否则后续可能无法继续修改或同步步数，再刷新微信运动确认排行榜步数。</li>
                   </ol>
                 </div>
                 <div class="share-meta" id="deviceShareMeta">正在检查系统默认共享账号...</div>
@@ -3217,6 +3238,7 @@ def _simple_page_html() -> str:
       qrConfirmPanel.hidden = true
       qrUnbindConfirm.checked = false
       confirmLoadDeviceQr.disabled = true
+      qrShield.classList.remove('qr-warning')
     }
 
     function renderDeviceShareMeta(data) {
@@ -3250,8 +3272,9 @@ def _simple_page_html() -> str:
           deviceQrImage.hidden = true
           deviceQrImage.removeAttribute('src')
           qrShield.hidden = false
-          qrShield.textContent = qrUnavailableMessage
           resetQrConfirmPanel()
+          qrShield.classList.add('qr-warning')
+          qrShield.textContent = qrUnavailableMessage
           setQrStatus(qrUnavailableMessage, 'failed')
           setShareStatus(sharedStepStatus, '当前二维码暂时不能使用，无法开始扫码同步。', 'failed')
           return
@@ -3283,8 +3306,9 @@ def _simple_page_html() -> str:
       deviceQrImage.hidden = true
       deviceQrImage.removeAttribute('src')
       qrShield.hidden = false
-      qrShield.textContent = qrUnavailableMessage || '当前二维码有设备未解绑，暂时不能使用，请联系管理员。'
       resetQrConfirmPanel()
+      qrShield.classList.add('qr-warning')
+      qrShield.textContent = qrUnavailableMessage || '当前二维码有设备未解绑，暂时不能使用，请联系管理员。'
       setQrStatus(qrShield.textContent, 'failed')
     }
 
@@ -3308,7 +3332,8 @@ def _simple_page_html() -> str:
       deviceQrImage.hidden = true
       deviceQrImage.removeAttribute('src')
       qrShield.hidden = false
-      setQrStatus('请先确认取消绑定提醒。', '')
+      qrShield.classList.add('qr-warning')
+      setQrStatus('请先确认取消绑定提醒。', 'warning')
       const warnings = [
         '提示 1/3：一定要记得取消绑定/取关华米服务号。',
         '提示 2/3：一定要记得取消绑定/取关华米服务号。',
@@ -3324,9 +3349,10 @@ def _simple_page_html() -> str:
         }
         qrConfirmTimer = setTimeout(() => {
           qrConfirmTimer = null
+          qrShield.classList.remove('qr-warning')
           qrShield.textContent = '请勾选确认后再显示二维码。'
           qrConfirmPanel.hidden = false
-          setQrStatus('勾选确认后才会生成二维码。', '')
+          setQrStatus('勾选确认后才会生成二维码。', 'warning')
           loadDeviceQr.disabled = !qrConfigured && !qrPaused
           refreshDeviceQr.disabled = !qrConfigured && !qrPaused
         }, 900)
@@ -3345,6 +3371,7 @@ def _simple_page_html() -> str:
       deviceQrImage.hidden = true
       deviceQrImage.removeAttribute('src')
       qrShield.hidden = false
+      qrShield.classList.remove('qr-warning')
       qrShield.textContent = '正在生成临时二维码访问令牌...'
       setQrStatus('正在加载二维码...', '')
       try {
