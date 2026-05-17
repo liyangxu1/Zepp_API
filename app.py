@@ -2068,6 +2068,34 @@ def _simple_page_html() -> str:
     .qr-status.success { color: var(--success); }
     .qr-status.failed { color: var(--danger); }
 
+    .qr-confirm-panel {
+      display: grid;
+      gap: 10px;
+      border: 1px solid #fecaca;
+      border-radius: 8px;
+      background: #fff7ed;
+      padding: 12px;
+    }
+
+    .qr-confirm-panel[hidden] {
+      display: none;
+    }
+
+    .qr-confirm-check {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 800;
+      line-height: 1.55;
+    }
+
+    .qr-confirm-check input {
+      margin-top: 3px;
+      flex: 0 0 auto;
+    }
+
     .qr-rules {
       margin: 0;
       padding-left: 20px;
@@ -2867,6 +2895,13 @@ def _simple_page_html() -> str:
                   <button class="primary" type="button" id="loadDeviceQr">显示二维码</button>
                   <button class="ghost" type="button" id="refreshDeviceQr">刷新二维码</button>
                 </div>
+                <div class="qr-confirm-panel" id="qrConfirmPanel" hidden>
+                  <label class="qr-confirm-check">
+                    <input id="qrUnbindConfirm" type="checkbox" />
+                    <span>我已确认：扫码完成并同步成功后，一定会取消绑定/取关华米服务号；否则后续可能无法继续修改或同步步数。</span>
+                  </label>
+                  <button class="primary" type="button" id="confirmLoadDeviceQr" disabled>同意并显示二维码</button>
+                </div>
                 <div class="qr-status" id="deviceQrStatus">正在检查二维码配置...</div>
                 <ul class="qr-rules">
                   <li>请在微信内打开或用微信扫码，根据页面提示完成绑定。</li>
@@ -3049,6 +3084,9 @@ def _simple_page_html() -> str:
     const deviceQrImage = document.getElementById('deviceQrImage')
     const deviceQrStatus = document.getElementById('deviceQrStatus')
     const qrShield = document.getElementById('qrShield')
+    const qrConfirmPanel = document.getElementById('qrConfirmPanel')
+    const qrUnbindConfirm = document.getElementById('qrUnbindConfirm')
+    const confirmLoadDeviceQr = document.getElementById('confirmLoadDeviceQr')
     const deviceShareMeta = document.getElementById('deviceShareMeta')
     const sharedStepForm = document.getElementById('sharedStepForm')
     const sharedStepSubmit = document.getElementById('sharedStepSubmit')
@@ -3060,6 +3098,7 @@ def _simple_page_html() -> str:
     let qrPaused = false
     let qrUnavailableMessage = ''
     let sharedDeviceCount = 0
+    let qrConfirmTimer = null
 
     function escapeHtml(value) {
       return String(value ?? '')
@@ -3170,6 +3209,16 @@ def _simple_page_html() -> str:
       element.textContent = message
     }
 
+    function resetQrConfirmPanel() {
+      if (qrConfirmTimer) {
+        clearTimeout(qrConfirmTimer)
+        qrConfirmTimer = null
+      }
+      qrConfirmPanel.hidden = true
+      qrUnbindConfirm.checked = false
+      confirmLoadDeviceQr.disabled = true
+    }
+
     function renderDeviceShareMeta(data) {
       if (data?.paused) {
         deviceShareMeta.innerHTML = escapeHtml(data.unavailable_message || '当前二维码暂时不能使用，请联系管理员。')
@@ -3202,6 +3251,7 @@ def _simple_page_html() -> str:
           deviceQrImage.removeAttribute('src')
           qrShield.hidden = false
           qrShield.textContent = qrUnavailableMessage
+          resetQrConfirmPanel()
           setQrStatus(qrUnavailableMessage, 'failed')
           setShareStatus(sharedStepStatus, '当前二维码暂时不能使用，无法开始扫码同步。', 'failed')
           return
@@ -3229,28 +3279,67 @@ def _simple_page_html() -> str:
       }
     }
 
-    async function showDeviceQr() {
+    function showQrUnavailableMessage() {
+      deviceQrImage.hidden = true
+      deviceQrImage.removeAttribute('src')
+      qrShield.hidden = false
+      qrShield.textContent = qrUnavailableMessage || '当前二维码有设备未解绑，暂时不能使用，请联系管理员。'
+      resetQrConfirmPanel()
+      setQrStatus(qrShield.textContent, 'failed')
+    }
+
+    async function startDeviceQrConfirmFlow() {
       if (qrPaused) {
-        deviceQrImage.hidden = true
-        deviceQrImage.removeAttribute('src')
-        qrShield.hidden = false
-        qrShield.textContent = qrUnavailableMessage || '当前二维码有设备未解绑，暂时不能使用，请联系管理员。'
-        setQrStatus(qrShield.textContent, 'failed')
+        showQrUnavailableMessage()
         return
       }
       if (!qrConfigured) {
         await loadDeviceQrStatus()
       }
       if (qrPaused) {
-        deviceQrImage.hidden = true
-        deviceQrImage.removeAttribute('src')
-        qrShield.hidden = false
-        qrShield.textContent = qrUnavailableMessage || '当前二维码有设备未解绑，暂时不能使用，请联系管理员。'
-        setQrStatus(qrShield.textContent, 'failed')
+        showQrUnavailableMessage()
         return
       }
       if (!qrConfigured) return
 
+      resetQrConfirmPanel()
+      loadDeviceQr.disabled = true
+      refreshDeviceQr.disabled = true
+      deviceQrImage.hidden = true
+      deviceQrImage.removeAttribute('src')
+      qrShield.hidden = false
+      setQrStatus('请先确认取消绑定提醒。', '')
+      const warnings = [
+        '提示 1/3：一定要记得取消绑定/取关华米服务号。',
+        '提示 2/3：一定要记得取消绑定/取关华米服务号。',
+        '提示 3/3：一定要记得取消绑定/取关华米服务号。',
+      ]
+      let index = 0
+      const showNextWarning = () => {
+        qrShield.textContent = warnings[index]
+        index += 1
+        if (index < warnings.length) {
+          qrConfirmTimer = setTimeout(showNextWarning, 900)
+          return
+        }
+        qrConfirmTimer = setTimeout(() => {
+          qrConfirmTimer = null
+          qrShield.textContent = '请勾选确认后再显示二维码。'
+          qrConfirmPanel.hidden = false
+          setQrStatus('勾选确认后才会生成二维码。', '')
+          loadDeviceQr.disabled = !qrConfigured && !qrPaused
+          refreshDeviceQr.disabled = !qrConfigured && !qrPaused
+        }, 900)
+      }
+      showNextWarning()
+    }
+
+    async function showDeviceQr() {
+      if (!qrUnbindConfirm.checked) {
+        setQrStatus('请先勾选确认取消绑定提醒。', 'failed')
+        return
+      }
+      resetQrConfirmPanel()
       loadDeviceQr.disabled = true
       refreshDeviceQr.disabled = true
       deviceQrImage.hidden = true
@@ -3283,8 +3372,12 @@ def _simple_page_html() -> str:
       }
     }
 
-    loadDeviceQr.addEventListener('click', showDeviceQr)
-    refreshDeviceQr.addEventListener('click', showDeviceQr)
+    qrUnbindConfirm.addEventListener('change', () => {
+      confirmLoadDeviceQr.disabled = !qrUnbindConfirm.checked
+    })
+    confirmLoadDeviceQr.addEventListener('click', showDeviceQr)
+    loadDeviceQr.addEventListener('click', startDeviceQrConfirmFlow)
+    refreshDeviceQr.addEventListener('click', startDeviceQrConfirmFlow)
 
     sharedStepForm.addEventListener('submit', async (event) => {
       event.preventDefault()
