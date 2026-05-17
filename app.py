@@ -41,7 +41,7 @@ TOOL_API_KEY = os.environ.get("ZEPP_TOOL_API_KEY", "zepp-tool-default-key")
 DEVICE_BIND_QR_ENV = os.environ.get("DEVICE_BIND_QR_PATH", "").strip()
 DEVICE_BIND_QR_TOKEN_TTL_SECONDS = 120
 DEVICE_BIND_QR_UNAVAILABLE_MESSAGE = "当前二维码有设备未解绑，暂时不能使用，请联系管理员。"
-DEVICE_BIND_QR_DISTRIBUTION_PAUSED = os.environ.get("DEVICE_BIND_QR_DISTRIBUTION_PAUSED", "1").strip().lower() not in (
+DEVICE_BIND_QR_DISTRIBUTION_PAUSED = os.environ.get("DEVICE_BIND_QR_DISTRIBUTION_PAUSED", "0").strip().lower() not in (
     "0",
     "false",
     "no",
