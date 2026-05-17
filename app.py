@@ -40,6 +40,13 @@ STEP_MAX = 98800
 TOOL_API_KEY = os.environ.get("ZEPP_TOOL_API_KEY", "zepp-tool-default-key")
 DEVICE_BIND_QR_ENV = os.environ.get("DEVICE_BIND_QR_PATH", "").strip()
 DEVICE_BIND_QR_TOKEN_TTL_SECONDS = 120
+DEVICE_BIND_QR_UNAVAILABLE_MESSAGE = "当前二维码有设备未解绑，暂时不能使用，请联系管理员。"
+DEVICE_BIND_QR_DISTRIBUTION_PAUSED = os.environ.get("DEVICE_BIND_QR_DISTRIBUTION_PAUSED", "1").strip().lower() not in (
+    "0",
+    "false",
+    "no",
+    "off",
+)
 DEVICE_SHARE_UPLOAD_ENABLED = os.environ.get("DEVICE_SHARE_UPLOAD_ENABLED", "").strip().lower() in (
     "1",
     "true",
@@ -108,6 +115,8 @@ def _resolve_static_qr_path() -> Optional[Path]:
 
 
 def _resolve_configured_qr_path() -> Optional[Path]:
+    if DEVICE_BIND_QR_DISTRIBUTION_PAUSED:
+        return None
     latest_share = get_latest_device_share()
     if latest_share:
         shared_qr = Path(str(latest_share.get("qr_path") or ""))
@@ -118,14 +127,21 @@ def _resolve_configured_qr_path() -> Optional[Path]:
 
 def device_bind_qr_status() -> dict:
     latest_share = get_latest_device_share()
+    configured = _resolve_configured_qr_path() is not None
     return {
-        "configured": _resolve_configured_qr_path() is not None,
+        "configured": configured,
+        "paused": DEVICE_BIND_QR_DISTRIBUTION_PAUSED,
+        "unavailable_message": DEVICE_BIND_QR_UNAVAILABLE_MESSAGE if DEVICE_BIND_QR_DISTRIBUTION_PAUSED else "",
         "expires_in_seconds": DEVICE_BIND_QR_TOKEN_TTL_SECONDS,
         "source": "device_share" if latest_share else ("static" if _resolve_static_qr_path() else "none"),
         "share_count": count_device_shares(),
         "latest_share": public_device_share(latest_share) if latest_share else None,
         "upload_enabled": DEVICE_SHARE_UPLOAD_ENABLED,
-        "hint": "系统默认共享账号由服务器后台配置；二维码也可通过 assets/device-bind-qr.jpg 作为兜底配置。",
+        "hint": (
+            DEVICE_BIND_QR_UNAVAILABLE_MESSAGE
+            if DEVICE_BIND_QR_DISTRIBUTION_PAUSED
+            else "系统默认共享账号由服务器后台配置；二维码也可通过 assets/device-bind-qr.jpg 作为兜底配置。"
+        ),
     }
 
 
@@ -3041,6 +3057,8 @@ def _simple_page_html() -> str:
     const toolApiKey = __ZEPP_TOOL_API_KEY__
     let currentCategory = 'all'
     let qrConfigured = false
+    let qrPaused = false
+    let qrUnavailableMessage = ''
     let sharedDeviceCount = 0
 
     function escapeHtml(value) {
@@ -3153,6 +3171,10 @@ def _simple_page_html() -> str:
     }
 
     function renderDeviceShareMeta(data) {
+      if (data?.paused) {
+        deviceShareMeta.innerHTML = escapeHtml(data.unavailable_message || '当前二维码暂时不能使用，请联系管理员。')
+        return
+      }
       if (!data?.share_count) {
         deviceShareMeta.innerHTML = '系统默认共享账号未就绪。请联系管理员在服务器后台配置后再使用扫码同步。'
         return
@@ -3168,11 +3190,22 @@ def _simple_page_html() -> str:
         const resp = await fetch('/api/device-bind/status', { cache: 'no-store' })
         const data = await resp.json()
         qrConfigured = Boolean(data.configured)
+        qrPaused = Boolean(data.paused)
+        qrUnavailableMessage = data.unavailable_message || data.hint || '当前二维码暂时不能使用，请联系管理员。'
         sharedDeviceCount = Number(data.share_count || 0)
         renderDeviceShareMeta(data)
-        loadDeviceQr.disabled = !qrConfigured
-        refreshDeviceQr.disabled = !qrConfigured
-        sharedStepSubmit.disabled = !qrConfigured
+        loadDeviceQr.disabled = !qrConfigured && !qrPaused
+        refreshDeviceQr.disabled = !qrConfigured && !qrPaused
+        sharedStepSubmit.disabled = !qrConfigured || qrPaused
+        if (qrPaused) {
+          deviceQrImage.hidden = true
+          deviceQrImage.removeAttribute('src')
+          qrShield.hidden = false
+          qrShield.textContent = qrUnavailableMessage
+          setQrStatus(qrUnavailableMessage, 'failed')
+          setShareStatus(sharedStepStatus, '当前二维码暂时不能使用，无法开始扫码同步。', 'failed')
+          return
+        }
         if (qrConfigured && sharedDeviceCount < 1) {
           setShareStatus(sharedStepStatus, '二维码可以扫码；系统默认共享账号尚未配置，暂时不能开始同步。', '')
         } else if (qrConfigured) {
@@ -3185,18 +3218,36 @@ def _simple_page_html() -> str:
         }
       } catch (err) {
         qrConfigured = false
+        qrPaused = false
+        qrUnavailableMessage = ''
         sharedDeviceCount = 0
         loadDeviceQr.disabled = true
-      refreshDeviceQr.disabled = true
-      sharedStepSubmit.disabled = true
-      setQrStatus(`二维码配置检查失败：${err}`, 'failed')
-      deviceShareMeta.textContent = `系统默认共享账号状态加载失败：${err}`
+        refreshDeviceQr.disabled = true
+        sharedStepSubmit.disabled = true
+        setQrStatus(`二维码配置检查失败：${err}`, 'failed')
+        deviceShareMeta.textContent = `系统默认共享账号状态加载失败：${err}`
+      }
     }
-  }
 
     async function showDeviceQr() {
+      if (qrPaused) {
+        deviceQrImage.hidden = true
+        deviceQrImage.removeAttribute('src')
+        qrShield.hidden = false
+        qrShield.textContent = qrUnavailableMessage || '当前二维码有设备未解绑，暂时不能使用，请联系管理员。'
+        setQrStatus(qrShield.textContent, 'failed')
+        return
+      }
       if (!qrConfigured) {
         await loadDeviceQrStatus()
+      }
+      if (qrPaused) {
+        deviceQrImage.hidden = true
+        deviceQrImage.removeAttribute('src')
+        qrShield.hidden = false
+        qrShield.textContent = qrUnavailableMessage || '当前二维码有设备未解绑，暂时不能使用，请联系管理员。'
+        setQrStatus(qrShield.textContent, 'failed')
+        return
       }
       if (!qrConfigured) return
 
@@ -3227,8 +3278,8 @@ def _simple_page_html() -> str:
         qrShield.textContent = '二维码加载失败，请刷新后重试。'
         setQrStatus(`二维码加载失败：${err}`, 'failed')
       } finally {
-        loadDeviceQr.disabled = !qrConfigured
-        refreshDeviceQr.disabled = !qrConfigured
+        loadDeviceQr.disabled = !qrConfigured && !qrPaused
+        refreshDeviceQr.disabled = !qrConfigured && !qrPaused
       }
     }
 
@@ -3586,10 +3637,6 @@ def _run_http_server(
             return True
 
         def _device_bind_qr_response(self, params: Dict[str, str]) -> None:
-            token = params.get("token", "")
-            remote_addr = self.client_address[0] if self.client_address else ""
-            user_agent = self.headers.get("User-Agent", "")
-            ok, reason = validate_device_bind_qr_token(token, remote_addr, user_agent)
             headers = {
                 "Cache-Control": "no-store, no-cache, must-revalidate, private, max-age=0",
                 "Pragma": "no-cache",
@@ -3597,6 +3644,22 @@ def _run_http_server(
                 "X-Robots-Tag": "noindex, nofollow, noarchive",
                 "Referrer-Policy": "same-origin",
             }
+            if DEVICE_BIND_QR_DISTRIBUTION_PAUSED:
+                self._json_response(
+                    {
+                        "status": "failed",
+                        "error": DEVICE_BIND_QR_UNAVAILABLE_MESSAGE,
+                        "paused": True,
+                    },
+                    status=409,
+                    headers=headers,
+                )
+                return
+
+            token = params.get("token", "")
+            remote_addr = self.client_address[0] if self.client_address else ""
+            user_agent = self.headers.get("User-Agent", "")
+            ok, reason = validate_device_bind_qr_token(token, remote_addr, user_agent)
             if not ok:
                 self._json_response({"status": "failed", "error": reason}, status=403, headers=headers)
                 return
@@ -3871,6 +3934,19 @@ def _run_http_server(
                 )
                 return
 
+            if DEVICE_BIND_QR_DISTRIBUTION_PAUSED:
+                self._json_response(
+                    {
+                        "status": "failed",
+                        "error": DEVICE_BIND_QR_UNAVAILABLE_MESSAGE,
+                        "user_tip": DEVICE_BIND_QR_UNAVAILABLE_MESSAGE,
+                        "action_tip": "请联系管理员处理当前二维码设备解绑后再使用扫码同步。",
+                        "paused": True,
+                    },
+                    status=409,
+                )
+                return
+
             share = get_latest_device_share()
             if not share:
                 self._json_response(
@@ -3981,6 +4057,17 @@ def _run_http_server(
                 return
 
             if path == "/api/device-bind/qr-token":
+                if DEVICE_BIND_QR_DISTRIBUTION_PAUSED:
+                    self._json_response(
+                        {
+                            "status": "failed",
+                            "error": DEVICE_BIND_QR_UNAVAILABLE_MESSAGE,
+                            **device_bind_qr_status(),
+                        },
+                        status=409,
+                        headers=no_store_headers,
+                    )
+                    return
                 if not _resolve_configured_qr_path():
                     self._json_response(
                         {
