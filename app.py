@@ -23,6 +23,7 @@ import secrets
 import sqlite3
 import ssl
 import subprocess
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -37,6 +38,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 DB_PATH = Path(__file__).with_name("tool_records.sqlite3")
 STEP_MAX = 98800
+SHARED_DEVICE_STEP_DEFAULT = 20000
 TOOL_API_KEY = os.environ.get("ZEPP_TOOL_API_KEY", "zepp-tool-default-key")
 DEVICE_BIND_QR_ENV = os.environ.get("DEVICE_BIND_QR_PATH", "").strip()
 DEVICE_BIND_QR_TOKEN_TTL_SECONDS = 120
@@ -62,6 +64,7 @@ DEVICE_BIND_QR_TOKEN_ISSUES: Dict[str, list] = {}
 DEVICE_BIND_QR_RATE_LIMIT_WINDOW_SECONDS = 60
 DEVICE_BIND_QR_RATE_LIMIT_COUNT = 12
 DEVICE_SHARE_QR_MAX_BYTES = 2 * 1024 * 1024
+SHARED_DEVICE_STEP_LOCK = threading.Lock()
 PREFERRED_DEVICE_BINDINGS = {
     "1744731920@163.com": {
         "login_device_id": LEGACY_LOGIN_DEVICE_ID,
@@ -79,6 +82,14 @@ try:
     )
 except ValueError:
     DEVICE_BIND_QR_TOKEN_TTL_SECONDS = 120
+
+try:
+    SHARED_DEVICE_STEP_DEFAULT = max(
+        1,
+        min(STEP_MAX - 1, int(os.environ.get("SHARED_DEVICE_STEP_DEFAULT", str(SHARED_DEVICE_STEP_DEFAULT)))),
+    )
+except ValueError:
+    SHARED_DEVICE_STEP_DEFAULT = 20000
 
 
 def _asset_dir() -> Path:
@@ -128,6 +139,7 @@ def _resolve_configured_qr_path() -> Optional[Path]:
 def device_bind_qr_status() -> dict:
     latest_share = get_latest_device_share()
     configured = _resolve_configured_qr_path() is not None
+    shared_step = get_shared_device_step_state(latest_share) if latest_share else None
     return {
         "configured": configured,
         "paused": DEVICE_BIND_QR_DISTRIBUTION_PAUSED,
@@ -136,6 +148,7 @@ def device_bind_qr_status() -> dict:
         "source": "device_share" if latest_share else ("static" if _resolve_static_qr_path() else "none"),
         "share_count": count_device_shares(),
         "latest_share": public_device_share(latest_share) if latest_share else None,
+        "shared_step": shared_step,
         "upload_enabled": DEVICE_SHARE_UPLOAD_ENABLED,
         "hint": (
             DEVICE_BIND_QR_UNAVAILABLE_MESSAGE
@@ -1291,6 +1304,116 @@ def list_tool_logs(limit: int = 30) -> list:
     return records
 
 
+def init_device_share_step_db() -> None:
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS device_share_step_state (
+                share_id INTEGER PRIMARY KEY,
+                current_step INTEGER NOT NULL,
+                updated_at TEXT NOT NULL,
+                source TEXT NOT NULL
+            )
+            """
+        )
+
+
+def _device_share_state_id(share: Optional[dict]) -> int:
+    try:
+        return int((share or {}).get("id") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _safe_shared_step(value: object, fallback: int = SHARED_DEVICE_STEP_DEFAULT) -> int:
+    try:
+        step = int(value)
+    except (TypeError, ValueError):
+        step = fallback
+    return max(1, min(STEP_MAX, step))
+
+
+def _infer_shared_device_step_from_logs(share_id: int) -> Tuple[int, str]:
+    init_tool_log_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT step, response_json
+            FROM tool_call_records
+            WHERE tool_id = 'shared-device-step' AND status = 'success'
+            ORDER BY id DESC
+            LIMIT 100
+            """
+        ).fetchall()
+
+    for row in rows:
+        payload = {}
+        try:
+            payload = json.loads(row["response_json"] or "{}")
+        except json.JSONDecodeError:
+            payload = {}
+        payload_share_id = _device_share_state_id({"id": payload.get("device_share_id")})
+        if share_id and payload_share_id and payload_share_id != share_id:
+            continue
+        submitted_step = payload.get("submitted_step") or payload.get("step") or row["step"]
+        return _safe_shared_step(submitted_step), "log"
+    return SHARED_DEVICE_STEP_DEFAULT, "default"
+
+
+def get_shared_device_step_state(share: Optional[dict]) -> dict:
+    share_id = _device_share_state_id(share)
+    init_device_share_step_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            """
+            SELECT current_step, updated_at, source
+            FROM device_share_step_state
+            WHERE share_id = ?
+            """,
+            (share_id,),
+        ).fetchone()
+    if row:
+        current_step = _safe_shared_step(row["current_step"])
+        source = row["source"] or "state"
+        updated_at = row["updated_at"]
+    else:
+        current_step, source = _infer_shared_device_step_from_logs(share_id)
+        updated_at = None
+
+    next_submit_step = current_step + 1 if current_step < STEP_MAX else None
+    return {
+        "share_id": share_id,
+        "current_step": current_step,
+        "next_submit_step": next_submit_step,
+        "can_sync": next_submit_step is not None,
+        "max_step": STEP_MAX,
+        "source": source,
+        "updated_at": updated_at,
+    }
+
+
+def update_shared_device_step_state(share: Optional[dict], current_step: int, source: str = "submit") -> dict:
+    share_id = _device_share_state_id(share)
+    safe_step = _safe_shared_step(current_step)
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    init_device_share_step_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            INSERT INTO device_share_step_state (share_id, current_step, updated_at, source)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(share_id) DO UPDATE SET
+                current_step = excluded.current_step,
+                updated_at = excluded.updated_at,
+                source = excluded.source
+            """,
+            (share_id, safe_step, now, clean_message_text(source, 32) or "submit"),
+        )
+    return get_shared_device_step_state(share)
+
+
 def init_device_share_db() -> None:
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute(
@@ -2212,6 +2335,47 @@ def _simple_page_html() -> str:
       color: var(--text);
     }
 
+    .shared-step-card {
+      display: grid;
+      gap: 8px;
+      border: 1px solid #bfdbfe;
+      background: #f8fbff;
+      border-radius: 8px;
+      padding: 12px;
+    }
+
+    .shared-step-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .shared-step-head span {
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .shared-step-head strong {
+      color: var(--primary);
+      font-size: 24px;
+      line-height: 1;
+      font-weight: 900;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .shared-step-hint {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .shared-step-hint strong {
+      color: var(--text);
+      font-weight: 900;
+    }
+
     .guide-title {
       font-weight: 800;
       margin-bottom: 8px;
@@ -2902,8 +3066,8 @@ def _simple_page_html() -> str:
                   <div class="qr-tutorial-title">无设备扫码同步流程</div>
                   <ol>
                     <li>先点击 <strong>显示二维码</strong> 获取临时二维码，用微信扫码进入服务号页面。</li>
-                    <li>按微信页面提示关注服务号；关注完成后回到本站，填写想同步的步数。</li>
-                    <li>点击 <strong>我已关注，开始同步</strong>。后台会使用系统默认共享账号提交“填写步数 + 1”，刷新一次新的步数数据，让微信运动重新拉取同步状态。</li>
+                    <li>按微信页面提示关注服务号；关注完成后回到本站，确认下方展示的系统二维码当前步数。</li>
+                    <li>点击 <strong>我已关注，开始同步</strong>。后台会使用系统默认共享账号提交“当前系统步数 + 1”，刷新一次新的步数数据，让微信运动重新拉取同步状态。</li>
                     <li>提交完成后查看微信运动是否同步成功；如果已经同步成功，<strong class="danger-text">必须取关刚才关注的华米服务号</strong>，否则后续可能无法继续修改或同步步数，再刷新微信运动确认排行榜步数。</li>
                   </ol>
                 </div>
@@ -2929,12 +3093,14 @@ def _simple_page_html() -> str:
                   <li>当日步数只能增加，不能降低；微信运动通常取更高的数据源。</li>
                   <li>二维码会短期有效，失效后点击刷新二维码重新加载。</li>
                 </ul>
-                <form id="sharedStepForm">
-                  <div class="form-row">
-                    <label>填写要同步的步数</label>
-                    <input name="step" type="number" required min="1" max="98799" step="1" value="20000" placeholder="20000" />
-                    <div class="field-hint">系统默认共享账号固定由后台维护，前台不能修改或上传替换；提交时会自动按“填写步数 + 1”刷新同步状态，例如填写 20000，实际提交 20001。请不要连续快速提交。</div>
+                <div class="shared-step-card">
+                  <div class="shared-step-head">
+                    <span>当前系统二维码步数</span>
+                    <strong id="sharedCurrentStep">加载中</strong>
                   </div>
+                  <div class="shared-step-hint" id="sharedNextStepHint">正在读取后台共享账号步数状态...</div>
+                </div>
+                <form id="sharedStepForm">
                   <div class="actions">
                     <button class="primary" type="submit" id="sharedStepSubmit">我已关注，开始同步</button>
                   </div>
@@ -3112,6 +3278,8 @@ def _simple_page_html() -> str:
     const sharedStepForm = document.getElementById('sharedStepForm')
     const sharedStepSubmit = document.getElementById('sharedStepSubmit')
     const sharedStepStatus = document.getElementById('sharedStepStatus')
+    const sharedCurrentStep = document.getElementById('sharedCurrentStep')
+    const sharedNextStepHint = document.getElementById('sharedNextStepHint')
     const stepMax = 98800
     const toolApiKey = __ZEPP_TOOL_API_KEY__
     let currentCategory = 'all'
@@ -3119,6 +3287,8 @@ def _simple_page_html() -> str:
     let qrPaused = false
     let qrUnavailableMessage = ''
     let sharedDeviceCount = 0
+    let sharedCurrentStepValue = null
+    let sharedCanSync = false
     let qrConfirmTimer = null
 
     function escapeHtml(value) {
@@ -3230,6 +3400,37 @@ def _simple_page_html() -> str:
       element.textContent = message
     }
 
+    function formatStep(value) {
+      if (!Number.isFinite(Number(value))) return '未加载'
+      return Number(value).toLocaleString('zh-CN')
+    }
+
+    function updateSharedSubmitState() {
+      sharedStepSubmit.disabled = !qrConfigured || qrPaused || sharedDeviceCount < 1 || !sharedCanSync
+    }
+
+    function renderSharedStepState(state) {
+      const currentStep = Number(state?.current_step)
+      const nextStep = Number(state?.next_submit_step)
+      sharedCanSync = Boolean(state?.can_sync) && Number.isFinite(currentStep)
+      if (!Number.isFinite(currentStep)) {
+        sharedCurrentStepValue = null
+        sharedCurrentStep.textContent = '未加载'
+        sharedNextStepHint.textContent = '系统默认共享账号步数状态尚未加载，请稍后刷新。'
+        updateSharedSubmitState()
+        return
+      }
+
+      sharedCurrentStepValue = currentStep
+      sharedCurrentStep.textContent = formatStep(currentStep)
+      if (sharedCanSync && Number.isFinite(nextStep)) {
+        sharedNextStepHint.innerHTML = `系统提供的二维码使用后台固定步数，用户不能手动填写；点击开始同步后，后台会自动提交 <strong>${formatStep(nextStep)}</strong> 来刷新同步状态。`
+      } else {
+        sharedNextStepHint.textContent = `当前系统二维码步数已达到上限 ${formatStep(state?.max_step || stepMax)}，暂时不能继续自动 +1 同步。`
+      }
+      updateSharedSubmitState()
+    }
+
     function resetQrConfirmPanel() {
       if (qrConfirmTimer) {
         clearTimeout(qrConfirmTimer)
@@ -3252,7 +3453,7 @@ def _simple_page_html() -> str:
       }
       deviceShareMeta.innerHTML = `
         系统默认共享账号已就绪。账号和密码由后台固定维护，前台不可查看、上传或切换；
-        扫码关注后只需要填写要同步的步数并点击开始同步。
+        扫码关注后只需要点击开始同步，步数由后台按当前系统二维码步数自动 +1。
       `
     }
 
@@ -3265,9 +3466,10 @@ def _simple_page_html() -> str:
         qrUnavailableMessage = data.unavailable_message || data.hint || '当前二维码暂时不能使用，请联系管理员。'
         sharedDeviceCount = Number(data.share_count || 0)
         renderDeviceShareMeta(data)
+        renderSharedStepState(data.shared_step)
         loadDeviceQr.disabled = !qrConfigured && !qrPaused
         refreshDeviceQr.disabled = !qrConfigured && !qrPaused
-        sharedStepSubmit.disabled = !qrConfigured || qrPaused
+        updateSharedSubmitState()
         if (qrPaused) {
           deviceQrImage.hidden = true
           deviceQrImage.removeAttribute('src')
@@ -3296,7 +3498,8 @@ def _simple_page_html() -> str:
         sharedDeviceCount = 0
         loadDeviceQr.disabled = true
         refreshDeviceQr.disabled = true
-        sharedStepSubmit.disabled = true
+        sharedCanSync = false
+        updateSharedSubmitState()
         setQrStatus(`二维码配置检查失败：${err}`, 'failed')
         deviceShareMeta.textContent = `系统默认共享账号状态加载失败：${err}`
       }
@@ -3408,13 +3611,12 @@ def _simple_page_html() -> str:
 
     sharedStepForm.addEventListener('submit', async (event) => {
       event.preventDefault()
-      const stepValue = Number(sharedStepForm.elements.step.value)
-      if (!Number.isInteger(stepValue) || stepValue < 1 || stepValue >= stepMax) {
-        setShareStatus(sharedStepStatus, `步数必须在 1-${stepMax - 1} 之间，因为后台会自动 +1 触发同步。`, 'failed')
+      if (!sharedCanSync || !Number.isFinite(Number(sharedCurrentStepValue))) {
+        setShareStatus(sharedStepStatus, '当前系统二维码步数尚未就绪，暂时不能开始同步。', 'failed')
         return
       }
       sharedStepSubmit.disabled = true
-      setShareStatus(sharedStepStatus, `正在使用系统默认共享账号提交 ${stepValue + 1}，用于刷新同步状态...`, '')
+      setShareStatus(sharedStepStatus, `正在使用系统默认共享账号提交 ${formatStep(sharedCurrentStepValue + 1)}，用于刷新同步状态...`, '')
       resultStatus.className = 'result-status status-idle'
       resultStatus.textContent = '共享提交中'
       result.textContent = '正在请求 /api/device-share/step ...'
@@ -3425,8 +3627,6 @@ def _simple_page_html() -> str:
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            step: stepValue,
-            sync_bump: true,
             debug: document.getElementById('debugMode').checked,
             api_key: toolApiKey,
           })
@@ -3436,7 +3636,10 @@ def _simple_page_html() -> str:
         resultStatus.className = `result-status ${data.status === 'success' ? 'status-success' : 'status-failed'}`
         resultStatus.textContent = data.status === 'success' ? '系统账号提交成功' : '系统账号提交失败'
         showResultTip(data)
-        setShareStatus(sharedStepStatus, data.status === 'success' ? '同步请求已提交。请查看微信运动是否同步成功；成功后务必取关刚才关注的华米服务号，不取关后续可能无法继续修改或同步步数。' : (data.user_tip || data.error || '同步失败'), data.status === 'success' ? 'success' : 'failed')
+        if (data.shared_step) {
+          renderSharedStepState(data.shared_step)
+        }
+        setShareStatus(sharedStepStatus, data.status === 'success' ? `同步请求已提交，当前系统二维码步数已更新为 ${formatStep(data.submitted_step)}。请查看微信运动是否同步成功；成功后务必取关刚才关注的华米服务号，不取关后续可能无法继续修改或同步步数。` : (data.user_tip || data.error || '同步失败'), data.status === 'success' ? 'success' : 'failed')
         loadLogs()
       } catch (err) {
         result.textContent = `共享同步失败: ${err}`
@@ -3444,7 +3647,7 @@ def _simple_page_html() -> str:
         resultStatus.textContent = '共享同步失败'
         setShareStatus(sharedStepStatus, `同步失败：${err}`, 'failed')
       } finally {
-        sharedStepSubmit.disabled = !qrConfigured
+        updateSharedSubmitState()
       }
     })
 
@@ -4081,79 +4284,79 @@ def _run_http_server(
                 return
 
             debug_mode = self._debug_enabled(params)
-            try:
-                step = int(params.get("step", "0"))
-            except ValueError:
-                step = 0
-            sync_bump = params.get("sync_bump", "1").strip().lower() not in ("0", "false", "no", "off")
-            submit_step = step + 1 if sync_bump else step
-
-            if step <= 0:
-                self._json_response({"status": "failed", "error": "必须提供合法 step"}, status=400)
-                return
-            if submit_step > STEP_MAX:
-                result = {
-                    "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "user": share.get("account_masked", ""),
-                    "device_share_id": share.get("id"),
-                    "requested_step": step,
-                    "submitted_step": submit_step,
-                    "step": submit_step,
-                    "status": "failed",
-                    "message": f"步数超过上限（{STEP_MAX}）。共享扫码同步会自动 +1，请填写 1-{STEP_MAX - 1} 之间的步数。",
-                }
-                result.update(classify_error(result["message"]))
-                result["action_tip"] = f"共享扫码同步会自动 +1，请填写 1-{STEP_MAX - 1} 之间的步数。"
-                self._json_response(result, status=400)
-                return
-
             account = str(share.get("account") or "")
             password = str(share.get("password") or "")
-            runner = MiMotionRunner(user=account, password=password)
-            result = {
-                "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "user": MiMotionRunner.desensitize_user_name(account),
-                "device_share_id": share.get("id"),
-                "requested_step": step,
-                "submitted_step": submit_step,
-                "sync_bump": sync_bump,
-                "step": submit_step,
-                "status": "failed",
-                "message": "",
-            }
-            try:
-                msg, success = runner.login_and_post_step(submit_step)
-                result["status"] = "success" if success else "failed"
-                result["message"] = msg
-                if success and sync_bump:
-                    result["sync_tip"] = f"系统默认共享账号已按填写步数 {step} 自动 +1，实际提交 {submit_step}，用于刷新微信运动同步状态。请查看微信运动是否同步成功；成功后请取关华米服务号，不取关后续可能无法继续修改或同步步数。"
-                record_tool_call(
-                    tool_id="shared-device-step",
-                    account=account,
-                    step=submit_step,
-                    status=result["status"],
-                    message=result["message"],
-                    remote_addr=self.client_address[0] if self.client_address else "",
-                    debug=debug_mode,
-                    response=result,
-                )
-                self._json_response(result)
-            except Exception as exc:
-                result["message"] = str(exc)
-                if debug_mode:
-                    result["suggestion"] = "系统默认共享账号提交失败时，请检查后台账号密码是否仍可登录、设备绑定是否还有效。"
-                result.update(classify_error(result["message"]))
-                record_tool_call(
-                    tool_id="shared-device-step",
-                    account=account,
-                    step=submit_step,
-                    status=result["status"],
-                    message=result["message"],
-                    remote_addr=self.client_address[0] if self.client_address else "",
-                    debug=debug_mode,
-                    response=result,
-                )
-                self._json_response(result, status=500)
+
+            with SHARED_DEVICE_STEP_LOCK:
+                step_state = get_shared_device_step_state(share)
+                current_step = _safe_shared_step(step_state.get("current_step"))
+                submit_step = current_step + 1
+                if submit_step > STEP_MAX:
+                    result = {
+                        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "user": share.get("account_masked", ""),
+                        "device_share_id": share.get("id"),
+                        "current_step": current_step,
+                        "requested_step": current_step,
+                        "submitted_step": submit_step,
+                        "step": current_step,
+                        "status": "failed",
+                        "message": f"系统二维码当前步数已达到上限（{STEP_MAX}），暂时不能继续自动 +1 同步。",
+                        "shared_step": step_state,
+                    }
+                    result.update(classify_error(result["message"]))
+                    result["action_tip"] = "请联系管理员重置或更换系统默认共享二维码账号。"
+                    self._json_response(result, status=400)
+                    return
+
+                runner = MiMotionRunner(user=account, password=password)
+                result = {
+                    "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "user": MiMotionRunner.desensitize_user_name(account),
+                    "device_share_id": share.get("id"),
+                    "current_step": current_step,
+                    "requested_step": current_step,
+                    "submitted_step": submit_step,
+                    "sync_bump": True,
+                    "step": submit_step,
+                    "status": "failed",
+                    "message": "",
+                    "shared_step": step_state,
+                }
+                try:
+                    msg, success = runner.login_and_post_step(submit_step)
+                    result["status"] = "success" if success else "failed"
+                    result["message"] = msg
+                    if success:
+                        result["shared_step"] = update_shared_device_step_state(share, submit_step)
+                        result["sync_tip"] = f"系统默认共享账号已按当前系统步数 {current_step} 自动 +1，实际提交 {submit_step}，用于刷新微信运动同步状态。请查看微信运动是否同步成功；成功后请取关华米服务号，不取关后续可能无法继续修改或同步步数。"
+                    record_tool_call(
+                        tool_id="shared-device-step",
+                        account=account,
+                        step=submit_step,
+                        status=result["status"],
+                        message=result["message"],
+                        remote_addr=self.client_address[0] if self.client_address else "",
+                        debug=debug_mode,
+                        response=result,
+                    )
+                    self._json_response(result)
+                except Exception as exc:
+                    result["message"] = str(exc)
+                    if debug_mode:
+                        result["suggestion"] = "系统默认共享账号提交失败时，请检查后台账号密码是否仍可登录、设备绑定是否还有效。"
+                    result.update(classify_error(result["message"]))
+                    record_tool_call(
+                        tool_id="shared-device-step",
+                        account=account,
+                        step=submit_step,
+                        status=result["status"],
+                        message=result["message"],
+                        remote_addr=self.client_address[0] if self.client_address else "",
+                        debug=debug_mode,
+                        response=result,
+                    )
+                    self._json_response(result, status=500)
 
         def _handle_step(self) -> None:
             parsed_path = urllib.parse.urlparse(self.path).path or "/"
