@@ -39,6 +39,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 DB_PATH = Path(__file__).with_name("tool_records.sqlite3")
 STEP_MAX = 98800
 SHARED_DEVICE_STEP_DEFAULT = 20000
+SHARED_DEVICE_SELF_BLOCKED_ACCOUNT_HASHES = {
+    "418fc91ec857946d7179666f051d3553c035ceea3da1efcd74960cdb4aa71c86",
+}
 TOOL_API_KEY = os.environ.get("ZEPP_TOOL_API_KEY", "zepp-tool-default-key")
 DEVICE_BIND_QR_ENV = os.environ.get("DEVICE_BIND_QR_PATH", "").strip()
 DEVICE_BIND_QR_TOKEN_TTL_SECONDS = 120
@@ -248,6 +251,12 @@ def normalize_login_account(account: str) -> str:
         if lower.endswith(domain) and len(value) > len(domain):
             return f"{value[:-len(domain)]}@{domain}".lower()
     return value
+
+
+def is_shared_device_self_blocked_account(account: str) -> bool:
+    normalized = normalize_login_account(account)
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    return digest in SHARED_DEVICE_SELF_BLOCKED_ACCOUNT_HASHES
 
 
 def random_hex_id(length: int = 16) -> str:
@@ -3106,7 +3115,7 @@ def _simple_page_html() -> str:
                 </div>
               </div>
             </details>
-            <form id="stepForm">
+            <form id="stepForm" novalidate>
               <div class="form-row">
                 <label>账号（手机号或邮箱）</label>
                 <input name="user" type="text" required autocomplete="username" placeholder="Zepp Life 账号" />
@@ -3337,6 +3346,7 @@ def _simple_page_html() -> str:
     const sharedNextStepHint = document.getElementById('sharedNextStepHint')
     const stepMax = 98800
     const toolApiKey = __ZEPP_TOOL_API_KEY__
+    const sharedSelfBlockedAccounts = new Set(['3313696759@proton.me'])
     let currentCategory = 'all'
     let qrConfigured = false
     let qrPaused = false
@@ -3353,6 +3363,38 @@ def _simple_page_html() -> str:
         .replaceAll('>', '&gt;')
         .replaceAll('"', '&quot;')
         .replaceAll("'", '&#039;')
+    }
+
+    function normalizeLoginAccount(value) {
+      const raw = String(value || '').trim()
+      if (raw.includes('@')) return raw.toLowerCase()
+      const lower = raw.toLowerCase()
+      const domains = ['qq.com', '163.com', '126.com', 'gmail.com', 'proton.me', 'outlook.com', 'hotmail.com']
+      for (const domain of domains) {
+        if (lower.endsWith(domain) && raw.length > domain.length) {
+          return `${raw.slice(0, -domain.length)}@${domain}`.toLowerCase()
+        }
+      }
+      return raw
+    }
+
+    function isSharedSelfBlockedAccount(value) {
+      return sharedSelfBlockedAccounts.has(normalizeLoginAccount(value))
+    }
+
+    function showSharedSelfBlockedResult() {
+      const payload = {
+        status: 'failed',
+        error: '该账号为共享账号，不支持自定义步数',
+        user_tip: '该账号为共享账号，不支持自定义步数',
+        action_tip: '请切换到“没有设备，扫码绑定”流程使用系统共享二维码同步。',
+        blocked_shared_account: true,
+      }
+      resultStatus.className = 'result-status status-failed'
+      resultStatus.textContent = '提交失败'
+      result.textContent = JSON.stringify(payload, null, 2)
+      showResultTip(payload)
+      return payload
     }
 
     function showResultTip(json) {
@@ -3869,6 +3911,10 @@ def _simple_page_html() -> str:
         pwd: fd.get('pwd')?.toString().trim(),
         step: fd.get('step')?.toString().trim(),
       }
+      if (isSharedSelfBlockedAccount(payload.user)) {
+        showSharedSelfBlockedResult()
+        return
+      }
       if (!payload.user || !payload.pwd || !payload.step) {
         result.textContent = '请填写完整参数'
         return
@@ -4224,6 +4270,21 @@ def _run_http_server(
                 step = int(params.get("step", "0"))
             except ValueError:
                 step = 0
+
+            if user and is_shared_device_self_blocked_account(user):
+                result = {
+                    "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "user": MiMotionRunner.desensitize_user_name(user),
+                    "step": step if step > 0 else None,
+                    "status": "failed",
+                    "message": "该账号为共享账号，不支持自定义步数",
+                    "error": "该账号为共享账号，不支持自定义步数",
+                    "user_tip": "该账号为共享账号，不支持自定义步数",
+                    "action_tip": "请切换到“没有设备，扫码绑定”流程使用系统共享二维码同步。",
+                    "blocked_shared_account": True,
+                }
+                self._json_response(result, status=403)
+                return
 
             if not user or not pwd or step <= 0:
                 self._json_response(
