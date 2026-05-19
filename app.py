@@ -1908,6 +1908,10 @@ def _simple_page_html() -> str:
       gap: 22px;
     }
 
+    .content > * {
+      min-width: 0;
+    }
+
     .section-head {
       display: flex;
       align-items: end;
@@ -2733,7 +2737,7 @@ def _simple_page_html() -> str:
 
     .support-grid {
       display: grid;
-      grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+      grid-template-columns: minmax(0, 1fr);
       gap: 16px;
       align-items: start;
     }
@@ -2757,6 +2761,36 @@ def _simple_page_html() -> str:
       position: relative;
       display: grid;
       gap: 14px;
+    }
+
+    .community-top .community-inner {
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 18px;
+    }
+
+    .community-main {
+      display: grid;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .scroll-tip {
+      display: inline-flex;
+      width: fit-content;
+      align-items: center;
+      border: 1px solid #99f6e4;
+      border-radius: 999px;
+      background: #ecfeff;
+      color: var(--primary-strong);
+      padding: 5px 10px;
+      font-size: 13px;
+      font-weight: 900;
+      text-decoration: none;
+    }
+
+    .community-top button.ghost {
+      justify-self: start;
     }
 
     .group-meta {
@@ -2796,6 +2830,14 @@ def _simple_page_html() -> str:
       background: #fff;
       justify-self: center;
       box-shadow: var(--shadow-soft);
+    }
+
+    .community-top .qq-qr {
+      width: min(34vw, 220px);
+      min-width: 150px;
+      max-height: 220px;
+      object-fit: contain;
+      border-radius: 12px;
     }
 
     .message-form {
@@ -2884,7 +2926,11 @@ def _simple_page_html() -> str:
         height: auto;
         border-right: 0;
         border-bottom: 1px solid var(--line);
+        padding: 14px 16px;
       }
+      .sidebar .brand { margin-bottom: 0; }
+      .sidebar .side-section-title,
+      .sidebar .category { display: none; }
       .topbar { padding: 12px 16px; height: auto; flex-wrap: wrap; }
       .top-note { display: none; }
       .content { padding: 18px 16px 30px; }
@@ -2893,6 +2939,12 @@ def _simple_page_html() -> str:
       .section-head { align-items: start; flex-direction: column; }
       .guide-grid { grid-template-columns: 1fr; }
       .app-choice-grid { grid-template-columns: 1fr; }
+      .community-top .community-inner { grid-template-columns: 1fr; }
+      .community-top .qq-qr {
+        width: min(100%, 220px);
+        max-height: 220px;
+        justify-self: start;
+      }
     }
   </style>
 </head>
@@ -2937,6 +2989,27 @@ def _simple_page_html() -> str:
             <div class="stat"><strong>1</strong><span>可用工具</span></div>
             <div class="stat"><strong>5</strong><span>预留位置</span></div>
             <div class="stat"><strong>本地</strong><span>运行环境</span></div>
+          </div>
+        </section>
+
+        <section class="panel community-card community-top">
+          <div class="community-inner">
+            <div class="community-main">
+              <div>
+                <h2>QQ 交流群</h2>
+                <p>工具使用不成功、同步失败或想加新工具，可以先进群反馈。</p>
+              </div>
+              <div class="group-meta">
+                <div class="group-avatar">喵</div>
+                <div>
+                  <div class="group-name">接待喵的小窝</div>
+                  <div class="group-number">QQ 群号：<span id="groupNumber">1084427315</span></div>
+                </div>
+              </div>
+              <a class="scroll-tip" href="#toolPanel">使用工具请向下滑动</a>
+              <button class="ghost" type="button" id="copyGroupNumber">复制 QQ 群号</button>
+            </div>
+            <img class="qq-qr" src="/assets/qq-group.jpg" alt="接待喵的小窝 QQ 群二维码" />
           </div>
         </section>
 
@@ -3120,24 +3193,6 @@ def _simple_page_html() -> str:
         </section>
 
         <section class="support-grid">
-          <div class="panel community-card">
-            <div class="community-inner">
-              <div>
-                <h2>QQ 交流群</h2>
-                <p>工具使用不成功、同步失败或想加新工具，可以先进群反馈。</p>
-              </div>
-              <div class="group-meta">
-                <div class="group-avatar">喵</div>
-                <div>
-                  <div class="group-name">接待喵的小窝</div>
-                  <div class="group-number">QQ 群号：<span id="groupNumber">1084427315</span></div>
-                </div>
-              </div>
-              <img class="qq-qr" src="/assets/qq-group.jpg" alt="接待喵的小窝 QQ 群二维码" />
-              <button class="ghost" type="button" id="copyGroupNumber">复制 QQ 群号</button>
-            </div>
-          </div>
-
           <div class="panel">
             <h2>留言反馈</h2>
             <p>如果某个工具不成功，可以留下工具名称、现象和联系方式。留言展示会脱敏，数据库保留完整联系方式用于排查。</p>
