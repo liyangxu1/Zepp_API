@@ -1993,12 +1993,56 @@ def _simple_page_html() -> str:
       background: var(--primary-soft);
     }
 
+    .tool-card.external {
+      background: #fbfbfa;
+      border-color: #d7d7d2;
+    }
+
+    .tool-card.external:hover {
+      border-color: #17191c;
+    }
+
     .tool-title {
       display: flex;
       justify-content: space-between;
       gap: 10px;
       font-weight: 750;
       margin-bottom: 8px;
+    }
+
+    .tool-title-main {
+      min-width: 0;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .tool-name {
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .tool-icon {
+      width: 28px;
+      height: 28px;
+      flex: none;
+    }
+
+    .keyrun-mark {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 3px;
+      padding: 2px;
+    }
+
+    .keyrun-mark span {
+      border-radius: 2px;
+      background: #030405;
+    }
+
+    .keyrun-mark span:nth-child(4) {
+      border-radius: 50%;
+      background: linear-gradient(135deg, #f25a3d 0%, #e936a7 45%, #3d7dff 100%);
     }
 
     .badge {
@@ -2983,7 +3027,7 @@ def _simple_page_html() -> str:
       <div class="topbar">
         <div class="search-wrap">
           <span class="search-icon">⌕</span>
-          <input id="searchInput" type="text" placeholder="搜索工具，例如：步数、JSON、图片..." />
+          <input id="searchInput" type="text" placeholder="搜索工具，例如：步数、KeyRun、JSON..." />
           <span class="kbd">Ctrl K</span>
         </div>
         <div class="top-note">工具导航 · 本地服务 · 可持续扩展</div>
@@ -3278,9 +3322,10 @@ def _simple_page_html() -> str:
       {
         id: 'keyrun',
         category: 'dev',
-        title: '工具 1',
+        title: 'KeyRun JetBrains',
         badge: '外链',
-        desc: '作者自研的独立工具，点击后直接跳转到外部页面使用。',
+        desc: 'Windows、macOS、Linux 三个平台的 JetBrains 工具静态入口，并集中展示产品文件。',
+        icon: 'keyrun',
         url: 'https://liyangxu1.github.io/keyrun/',
       },
       {
@@ -3432,9 +3477,12 @@ def _simple_page_html() -> str:
       })
 
       grid.innerHTML = visible.map((tool) => `
-        <article class="tool-card ${tool.active ? 'active' : ''}" data-tool="${tool.id}">
+        <article class="tool-card ${tool.active ? 'active' : ''} ${tool.url ? 'external' : ''}" data-tool="${tool.id}">
           <div class="tool-title">
-            <span>${tool.title}</span>
+            <span class="tool-title-main">
+              ${tool.icon === 'keyrun' ? '<span class="tool-icon keyrun-mark" aria-hidden="true"><span></span><span></span><span></span><span></span></span>' : ''}
+              <span class="tool-name">${tool.title}</span>
+            </span>
             <span class="badge">${tool.badge}</span>
           </div>
           <p class="tool-desc">${tool.desc}</p>
