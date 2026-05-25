@@ -22,6 +22,7 @@ import re
 import secrets
 import sqlite3
 import ssl
+import socket
 import subprocess
 import threading
 import time
@@ -4025,6 +4026,23 @@ def _run_http_server(
         daemon_threads = True
         allow_reuse_address = True
         request_queue_size = 50
+        ssl_context: Optional[ssl.SSLContext] = None
+
+        def get_request(self):
+            client_socket, client_address = self.socket.accept()
+            if self.ssl_context is None:
+                return client_socket, client_address
+
+            try:
+                prefix = client_socket.recv(1, socket.MSG_PEEK)
+            except OSError:
+                client_socket.close()
+                raise
+
+            # TLS 握手的第一字节是 0x16；普通 HTTP 请求保持原始 socket。
+            if prefix == b"\x16":
+                client_socket = self.ssl_context.wrap_socket(client_socket, server_side=True)
+            return client_socket, client_address
 
     class StepHandler(BaseHTTPRequestHandler):
         def setup(self) -> None:
@@ -4675,8 +4693,8 @@ def _run_http_server(
     if ssl_cert:
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.load_cert_chain(certfile=ssl_cert, keyfile=ssl_key)
-        httpd.socket = context.wrap_socket(httpd.socket, server_side=True)
-        scheme = "https"
+        httpd.ssl_context = context
+        scheme = "http+https"
     init_tool_log_db()
     init_device_binding_db()
     init_zepp_token_cache_db()
