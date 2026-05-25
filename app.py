@@ -2061,6 +2061,22 @@ def _simple_page_html() -> str:
       margin: 0;
     }
 
+    .tool-purpose {
+      display: inline-flex;
+      align-items: center;
+      width: fit-content;
+      max-width: 100%;
+      margin: 0 0 8px;
+      padding: 4px 8px;
+      border: 1px solid #17191c;
+      border-radius: 6px;
+      background: #ffffff;
+      color: #17191c;
+      font-size: 12px;
+      font-weight: 850;
+      line-height: 1.35;
+    }
+
     .workspace {
       display: grid;
       grid-template-columns: minmax(320px, 440px) minmax(0, 1fr);
@@ -3324,7 +3340,8 @@ def _simple_page_html() -> str:
         category: 'dev',
         title: 'KeyRun JetBrains',
         badge: '外链',
-        desc: 'Windows、macOS、Linux 三个平台的 JetBrains 工具静态入口，并集中展示产品文件。',
+        purpose: '一键激活 JetBrains 全家桶',
+        desc: '提供 Windows、macOS、Linux 三个平台的激活脚本入口，覆盖常见 JetBrains IDE 产品。',
         icon: 'keyrun',
         url: 'https://liyangxu1.github.io/keyrun/',
       },
@@ -3472,7 +3489,7 @@ def _simple_page_html() -> str:
       const keyword = searchInput.value.trim().toLowerCase()
       const visible = tools.filter((tool) => {
         const categoryMatched = currentCategory === 'all' || tool.category === currentCategory
-        const keywordMatched = !keyword || `${tool.title} ${tool.desc}`.toLowerCase().includes(keyword)
+        const keywordMatched = !keyword || `${tool.title} ${tool.purpose || ''} ${tool.desc}`.toLowerCase().includes(keyword)
         return categoryMatched && keywordMatched
       })
 
@@ -3485,6 +3502,7 @@ def _simple_page_html() -> str:
             </span>
             <span class="badge">${tool.badge}</span>
           </div>
+          ${tool.purpose ? `<div class="tool-purpose">${tool.purpose}</div>` : ''}
           <p class="tool-desc">${tool.desc}</p>
         </article>
       `).join('') || '<div class="empty-card">没有匹配的工具，换个关键词试试。</div>'
