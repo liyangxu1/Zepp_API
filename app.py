@@ -2968,9 +2968,9 @@ def _simple_page_html() -> str:
         </div>
       </div>
       <div class="side-section-title">工具分类</div>
-      <button class="category active" data-category="all"><span>全部工具</span><span class="category-count">6</span></button>
+      <button class="category active" data-category="all"><span>全部工具</span><span class="category-count">7</span></button>
       <button class="category" data-category="life"><span>生活工具</span><span class="category-count">1</span></button>
-      <button class="category" data-category="dev"><span>开发工具</span><span class="category-count">2</span></button>
+      <button class="category" data-category="dev"><span>开发工具</span><span class="category-count">3</span></button>
       <button class="category" data-category="text"><span>文本工具</span><span class="category-count">1</span></button>
       <button class="category" data-category="image"><span>图片工具</span><span class="category-count">1</span></button>
       <button class="category" data-category="office"><span>办公工具</span><span class="category-count">1</span></button>
@@ -2992,10 +2992,10 @@ def _simple_page_html() -> str:
         <section class="section-head">
           <div>
             <h1>工具导航</h1>
-            <p class="section-desc">先把已跑通的微信步数修改放进工具站框架，后续功能按卡片继续接入。</p>
+            <p class="section-desc">先把已跑通的微信步数修改放进工具站框架，也支持跳转到独立工具页面。</p>
           </div>
           <div class="stats">
-            <div class="stat"><strong>1</strong><span>可用工具</span></div>
+            <div class="stat"><strong>2</strong><span>可用工具</span></div>
             <div class="stat"><strong>5</strong><span>预留位置</span></div>
             <div class="stat"><strong>本地</strong><span>运行环境</span></div>
           </div>
@@ -3275,6 +3275,14 @@ def _simple_page_html() -> str:
         active: true,
       },
       {
+        id: 'keyrun',
+        category: 'dev',
+        title: '工具 1',
+        badge: '外链',
+        desc: '作者自研的独立工具，点击后直接跳转到外部页面使用。',
+        url: 'https://liyangxu1.github.io/keyrun/',
+      },
+      {
         id: 'json-format',
         category: 'dev',
         title: 'JSON 格式化',
@@ -3435,6 +3443,11 @@ def _simple_page_html() -> str:
       document.querySelectorAll('[data-tool]').forEach((card) => {
         card.addEventListener('click', () => {
           const toolId = card.getAttribute('data-tool')
+          const tool = tools.find((item) => item.id === toolId)
+          if (tool?.url) {
+            window.location.href = tool.url
+            return
+          }
           if (toolId !== 'zepp-step') {
             resultStatus.className = 'result-status status-idle'
             resultStatus.textContent = '待接入'
