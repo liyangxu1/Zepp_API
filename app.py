@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import hmac
 import json
 import mimetypes
 import os
@@ -31,6 +32,7 @@ import urllib.request
 import uuid
 from urllib.error import HTTPError
 from datetime import datetime
+from http.cookies import SimpleCookie
 from email.parser import BytesParser
 from email.policy import default as email_policy
 from pathlib import Path
@@ -44,6 +46,10 @@ SHARED_DEVICE_SELF_BLOCKED_ACCOUNT_HASHES = {
     "418fc91ec857946d7179666f051d3553c035ceea3da1efcd74960cdb4aa71c86",
 }
 TOOL_API_KEY = os.environ.get("ZEPP_TOOL_API_KEY", "zepp-tool-default-key")
+ADMIN_PASSWORD = os.environ.get("ZEPP_ADMIN_PASSWORD", "").strip()
+ADMIN_SESSION_COOKIE = "zepp_admin_session"
+ADMIN_SESSION_TTL_SECONDS = 8 * 60 * 60
+ADMIN_SESSIONS: Dict[str, dict] = {}
 DEVICE_BIND_QR_ENV = os.environ.get("DEVICE_BIND_QR_PATH", "").strip()
 DEVICE_BIND_QR_TOKEN_TTL_SECONDS = 120
 DEVICE_BIND_QR_UNAVAILABLE_MESSAGE = "当前二维码有设备未解绑，暂时不能使用，请联系管理员。"
@@ -1586,6 +1592,135 @@ def mask_contact(value: str) -> str:
 def clean_message_text(value: str, max_len: int = 500) -> str:
     text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]+", "", value or "")
     return text.strip()[:max_len]
+
+
+def current_token_date() -> str:
+    return datetime.now().strftime("%Y-%m-%d")
+
+
+def generate_daily_token() -> str:
+    return f"{secrets.randbelow(1000000):06d}"
+
+
+def init_daily_token_db() -> None:
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS daily_verification_tokens (
+                token_date TEXT PRIMARY KEY,
+                token TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+
+
+def get_or_create_daily_token(token_date: Optional[str] = None) -> dict:
+    init_daily_token_db()
+    safe_date = token_date or current_token_date()
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            """
+            SELECT token_date, token, created_at, updated_at
+            FROM daily_verification_tokens
+            WHERE token_date = ?
+            """,
+            (safe_date,),
+        ).fetchone()
+        if row:
+            return dict(row)
+
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        token = generate_daily_token()
+        conn.execute(
+            """
+            INSERT INTO daily_verification_tokens (token_date, token, created_at, updated_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (safe_date, token, now, now),
+        )
+    return {
+        "token_date": safe_date,
+        "token": token,
+        "created_at": now,
+        "updated_at": now,
+    }
+
+
+def rotate_daily_token(token_date: Optional[str] = None) -> dict:
+    init_daily_token_db()
+    safe_date = token_date or current_token_date()
+    existing = get_or_create_daily_token(safe_date)
+    token = generate_daily_token()
+    while token == existing.get("token"):
+        token = generate_daily_token()
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    created_at = str(existing.get("created_at") or now)
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            INSERT INTO daily_verification_tokens (token_date, token, created_at, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(token_date) DO UPDATE SET
+                token = excluded.token,
+                updated_at = excluded.updated_at
+            """,
+            (safe_date, token, created_at, now),
+        )
+    return {
+        "token_date": safe_date,
+        "token": token,
+        "created_at": created_at,
+        "updated_at": now,
+    }
+
+
+def request_verification_token(params: Dict[str, str]) -> str:
+    return (
+        params.get("verification_token", "")
+        or params.get("daily_token", "")
+        or params.get("captcha", "")
+    ).strip()
+
+
+def validate_daily_token(params: Dict[str, str]) -> bool:
+    provided = request_verification_token(params)
+    if not re.fullmatch(r"\d{6}", provided or ""):
+        return False
+    current = str(get_or_create_daily_token().get("token") or "")
+    return hmac.compare_digest(provided, current)
+
+
+def cleanup_admin_sessions(now: Optional[float] = None) -> None:
+    current = now or time.time()
+    expired = [
+        token
+        for token, meta in ADMIN_SESSIONS.items()
+        if float(meta.get("expires_at", 0)) <= current
+    ]
+    for token in expired:
+        ADMIN_SESSIONS.pop(token, None)
+
+
+def create_admin_session() -> str:
+    cleanup_admin_sessions()
+    token = secrets.token_urlsafe(32)
+    ADMIN_SESSIONS[token] = {
+        "created_at": time.time(),
+        "expires_at": time.time() + ADMIN_SESSION_TTL_SECONDS,
+    }
+    return token
+
+
+def is_valid_admin_session(token: str) -> bool:
+    cleanup_admin_sessions()
+    meta = ADMIN_SESSIONS.get(token or "")
+    if not meta:
+        return False
+    meta["expires_at"] = time.time() + ADMIN_SESSION_TTL_SECONDS
+    return True
 
 
 def init_message_board_db() -> None:
@@ -3190,6 +3325,11 @@ def _simple_page_html() -> str:
                 <input name="step" type="number" required min="1" max="98800" step="1" placeholder="20000" />
                 <div class="field-hint">优先用 8000-25000 测试；最高限制 98800；只能增加步数，不能把已同步的步数降下来。</div>
               </div>
+              <div class="form-row">
+                <label>今日验证码</label>
+                <input name="verification_token" id="verificationToken" type="text" required inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" placeholder="6 位数字验证码" />
+                <div class="field-hint">验证码每日更新，请向管理员获取；预览模拟数据不需要验证码。</div>
+              </div>
               <label class="inline-option">
                 <input id="debugMode" type="checkbox" checked />
                 显示详细报错
@@ -3244,6 +3384,11 @@ def _simple_page_html() -> str:
                   <div class="shared-step-hint" id="sharedNextStepHint">正在读取后台共享账号步数状态...</div>
                 </div>
                 <form id="sharedStepForm">
+                  <div class="form-row">
+                    <label>今日验证码</label>
+                    <input name="verification_token" id="sharedVerificationToken" type="text" required inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" placeholder="6 位数字验证码" />
+                    <div class="field-hint">扫码同步也需要当天验证码，验证码错误不会提交系统共享账号。</div>
+                  </div>
                   <div class="actions">
                     <button class="primary" type="submit" id="sharedStepSubmit">我已关注，开始同步</button>
                   </div>
@@ -3401,6 +3546,8 @@ def _simple_page_html() -> str:
     const copyGroupNumber = document.getElementById('copyGroupNumber')
     const flowTabs = document.querySelectorAll('[data-flow]')
     const flowPanels = document.querySelectorAll('[data-flow-panel]')
+    const verificationToken = document.getElementById('verificationToken')
+    const sharedVerificationToken = document.getElementById('sharedVerificationToken')
     const loadDeviceQr = document.getElementById('loadDeviceQr')
     const refreshDeviceQr = document.getElementById('refreshDeviceQr')
     const deviceQrImage = document.getElementById('deviceQrImage')
@@ -3451,6 +3598,25 @@ def _simple_page_html() -> str:
 
     function isSharedSelfBlockedAccount(value) {
       return sharedSelfBlockedAccounts.has(normalizeLoginAccount(value))
+    }
+
+    function isValidVerificationToken(value) {
+      return /^[0-9]{6}$/.test(String(value || '').trim())
+    }
+
+    function syncVerificationToken(source, target) {
+      target.value = source.value.replace(/[^0-9]/g, '').slice(0, 6)
+    }
+
+    verificationToken.addEventListener('input', () => syncVerificationToken(verificationToken, sharedVerificationToken))
+    sharedVerificationToken.addEventListener('input', () => syncVerificationToken(sharedVerificationToken, verificationToken))
+
+    function showVerificationTokenError(target = result) {
+      resultStatus.className = 'result-status status-failed'
+      resultStatus.textContent = '验证码错误'
+      resultTip.className = 'tip-box show failed'
+      resultTip.innerHTML = '<strong>今日验证码不正确</strong><span>请向管理员获取当天 6 位数字验证码后再提交。</span>'
+      target.textContent = '请填写当天 6 位数字验证码'
     }
 
     function showSharedSelfBlockedResult() {
@@ -3792,6 +3958,12 @@ def _simple_page_html() -> str:
         setShareStatus(sharedStepStatus, '当前系统二维码步数尚未就绪，暂时不能开始同步。', 'failed')
         return
       }
+      const token = sharedVerificationToken.value.trim()
+      if (!isValidVerificationToken(token)) {
+        showVerificationTokenError(result)
+        setShareStatus(sharedStepStatus, '请先填写当天 6 位数字验证码。', 'failed')
+        return
+      }
       sharedStepSubmit.disabled = true
       setShareStatus(sharedStepStatus, `正在使用系统默认共享账号提交 ${formatStep(sharedCurrentStepValue + 1)}，用于刷新同步状态...`, '')
       resultStatus.className = 'result-status status-idle'
@@ -3806,6 +3978,7 @@ def _simple_page_html() -> str:
           body: JSON.stringify({
             debug: document.getElementById('debugMode').checked,
             api_key: toolApiKey,
+            verification_token: token,
           })
         })
         const data = await resp.json()
@@ -3990,6 +4163,11 @@ def _simple_page_html() -> str:
         user: fd.get('user')?.toString().trim(),
         pwd: fd.get('pwd')?.toString().trim(),
         step: fd.get('step')?.toString().trim(),
+        verification_token: fd.get('verification_token')?.toString().trim(),
+      }
+      if (!isValidVerificationToken(payload.verification_token)) {
+        showVerificationTokenError()
+        return
       }
       if (isSharedSelfBlockedAccount(payload.user)) {
         showSharedSelfBlockedResult()
@@ -4026,7 +4204,8 @@ def _simple_page_html() -> str:
             password: payload.pwd,
             step: Number(payload.step),
             debug: document.getElementById('debugMode').checked,
-            api_key: toolApiKey
+            api_key: toolApiKey,
+            verification_token: payload.verification_token
           })
         })
         const text = await resp.text()
@@ -4061,6 +4240,285 @@ def _simple_page_html() -> str:
 </body>
 </html>
 """.replace("__ZEPP_TOOL_API_KEY__", json.dumps(TOOL_API_KEY))
+
+
+def _admin_page_html() -> str:
+    return """<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>轻工具箱管理后台</title>
+  <style>
+    :root {
+      --bg: #f7fafc;
+      --panel: #ffffff;
+      --line: #e2e8f0;
+      --text: #0f172a;
+      --muted: #64748b;
+      --primary: #0f766e;
+      --danger: #b91c1c;
+      --success: #0f8f5f;
+      --shadow: 0 16px 40px rgba(15, 23, 42, 0.08);
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      background: linear-gradient(180deg, #eefafa 0, var(--bg) 320px);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+
+    .shell {
+      width: min(760px, 100%);
+      display: grid;
+      gap: 16px;
+    }
+
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.96);
+      box-shadow: var(--shadow);
+      padding: 22px;
+    }
+
+    h1, h2 { margin: 0; letter-spacing: 0; }
+    h1 { font-size: 24px; }
+    h2 { font-size: 18px; }
+    p { margin: 8px 0 0; color: var(--muted); line-height: 1.6; }
+    label { display: block; margin: 16px 0 7px; font-weight: 800; }
+    input {
+      width: 100%;
+      height: 42px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 0 12px;
+      font: inherit;
+    }
+
+    button {
+      min-height: 40px;
+      border: 0;
+      border-radius: 8px;
+      padding: 0 14px;
+      background: var(--primary);
+      color: #fff;
+      font: inherit;
+      font-weight: 850;
+      cursor: pointer;
+    }
+
+    button.ghost {
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--text);
+    }
+
+    .actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 16px;
+    }
+
+    .token-box {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 14px;
+      align-items: center;
+      margin-top: 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #f8fafc;
+      padding: 16px;
+    }
+
+    .token-value {
+      font-size: clamp(34px, 8vw, 56px);
+      font-weight: 950;
+      letter-spacing: 0.12em;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .meta {
+      margin-top: 12px;
+      color: var(--muted);
+      line-height: 1.7;
+    }
+
+    .status {
+      min-height: 22px;
+      margin-top: 12px;
+      font-weight: 800;
+    }
+
+    .status.success { color: var(--success); }
+    .status.failed { color: var(--danger); }
+    .hidden { display: none !important; }
+
+    @media (max-width: 560px) {
+      body { padding: 14px; }
+      .panel { padding: 18px; }
+      .token-box { grid-template-columns: 1fr; }
+      .actions button { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="panel">
+      <h1>轻工具箱管理后台</h1>
+      <p>用于查看和刷新当天 6 位验证码。用户提交步数前必须填写当天验证码。</p>
+    </section>
+
+    <section class="panel" id="loginPanel">
+      <h2>管理员登录</h2>
+      <form id="loginForm">
+        <label>后台密码</label>
+        <input id="password" type="password" autocomplete="current-password" placeholder="输入 ZEPP_ADMIN_PASSWORD" />
+        <div class="actions">
+          <button type="submit" id="loginBtn">登录</button>
+        </div>
+      </form>
+      <div class="status" id="loginStatus"></div>
+    </section>
+
+    <section class="panel hidden" id="dashboardPanel">
+      <h2>今日验证码</h2>
+      <p>每天按服务器日期自动生成；点击刷新后，旧验证码立即失效。</p>
+      <div class="token-box">
+        <div>
+          <div class="token-value" id="tokenValue">------</div>
+          <div class="meta" id="tokenMeta">正在加载...</div>
+        </div>
+        <button type="button" id="copyToken">复制验证码</button>
+      </div>
+      <div class="actions">
+        <button type="button" id="rotateToken">刷新今日验证码</button>
+        <button class="ghost" type="button" id="reloadToken">重新加载</button>
+        <button class="ghost" type="button" id="logoutBtn">退出登录</button>
+      </div>
+      <div class="status" id="dashboardStatus"></div>
+    </section>
+  </main>
+
+  <script>
+    const loginPanel = document.getElementById('loginPanel')
+    const dashboardPanel = document.getElementById('dashboardPanel')
+    const loginForm = document.getElementById('loginForm')
+    const loginStatus = document.getElementById('loginStatus')
+    const dashboardStatus = document.getElementById('dashboardStatus')
+    const tokenValue = document.getElementById('tokenValue')
+    const tokenMeta = document.getElementById('tokenMeta')
+    const loginBtn = document.getElementById('loginBtn')
+    const rotateToken = document.getElementById('rotateToken')
+    const reloadToken = document.getElementById('reloadToken')
+    const copyToken = document.getElementById('copyToken')
+    const logoutBtn = document.getElementById('logoutBtn')
+
+    function setStatus(element, text, state = '') {
+      element.className = `status ${state}`.trim()
+      element.textContent = text
+    }
+
+    function showLogin() {
+      loginPanel.classList.remove('hidden')
+      dashboardPanel.classList.add('hidden')
+    }
+
+    function showDashboard() {
+      loginPanel.classList.add('hidden')
+      dashboardPanel.classList.remove('hidden')
+    }
+
+    function renderToken(data) {
+      tokenValue.textContent = data.token || '------'
+      tokenMeta.textContent = `日期：${data.token_date || '-'}；创建：${data.created_at || '-'}；更新：${data.updated_at || '-'}`
+    }
+
+    async function loadToken() {
+      setStatus(dashboardStatus, '正在加载验证码...')
+      const resp = await fetch('/api/admin/daily-token', { cache: 'no-store' })
+      if (resp.status === 401) {
+        showLogin()
+        setStatus(loginStatus, '请先登录后台。')
+        return
+      }
+      const data = await resp.json()
+      if (!resp.ok) throw new Error(data.error || '加载失败')
+      renderToken(data)
+      showDashboard()
+      setStatus(dashboardStatus, '验证码已加载。', 'success')
+    }
+
+    loginForm.addEventListener('submit', async (event) => {
+      event.preventDefault()
+      loginBtn.disabled = true
+      setStatus(loginStatus, '正在登录...')
+      try {
+        const resp = await fetch('/api/admin/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password: document.getElementById('password').value })
+        })
+        const data = await resp.json()
+        if (!resp.ok || data.status !== 'success') throw new Error(data.error || '登录失败')
+        document.getElementById('password').value = ''
+        setStatus(loginStatus, '')
+        await loadToken()
+      } catch (err) {
+        setStatus(loginStatus, `登录失败：${err.message || err}`, 'failed')
+      } finally {
+        loginBtn.disabled = false
+      }
+    })
+
+    rotateToken.addEventListener('click', async () => {
+      rotateToken.disabled = true
+      setStatus(dashboardStatus, '正在刷新验证码...')
+      try {
+        const resp = await fetch('/api/admin/daily-token/rotate', { method: 'POST' })
+        const data = await resp.json()
+        if (!resp.ok) throw new Error(data.error || '刷新失败')
+        renderToken(data)
+        setStatus(dashboardStatus, '今日验证码已刷新，旧验证码已失效。', 'success')
+      } catch (err) {
+        setStatus(dashboardStatus, `刷新失败：${err.message || err}`, 'failed')
+      } finally {
+        rotateToken.disabled = false
+      }
+    })
+
+    reloadToken.addEventListener('click', () => {
+      loadToken().catch((err) => setStatus(dashboardStatus, `加载失败：${err.message || err}`, 'failed'))
+    })
+
+    copyToken.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(tokenValue.textContent.trim())
+        setStatus(dashboardStatus, '验证码已复制。', 'success')
+      } catch {
+        setStatus(dashboardStatus, `当前验证码：${tokenValue.textContent.trim()}`)
+      }
+    })
+
+    logoutBtn.addEventListener('click', async () => {
+      await fetch('/api/admin/logout', { method: 'POST' })
+      showLogin()
+      setStatus(loginStatus, '已退出登录。')
+    })
+
+    loadToken().catch(() => showLogin())
+  </script>
+</body>
+</html>
+"""
 
 
 def _run_cli(user: str, pwd: str, step: int) -> None:
@@ -4124,6 +4582,184 @@ def _run_http_server(
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
+
+        def _html_response(self, html: str, status: int = 200, headers: Optional[Dict[str, str]] = None) -> None:
+            data = html.encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            for key, value in (headers or {}).items():
+                self.send_header(key, value)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def _is_https_request(self) -> bool:
+            return isinstance(self.request, ssl.SSLSocket)
+
+        def _is_local_request(self) -> bool:
+            remote_addr = self.client_address[0] if self.client_address else ""
+            return remote_addr in ("127.0.0.1", "::1", "localhost")
+
+        def _admin_access_allowed(self) -> bool:
+            return self._is_https_request() or self._is_local_request()
+
+        def _cookie_value(self, name: str) -> str:
+            cookie_header = self.headers.get("Cookie", "")
+            if not cookie_header:
+                return ""
+            cookie = SimpleCookie()
+            try:
+                cookie.load(cookie_header)
+            except Exception:
+                return ""
+            morsel = cookie.get(name)
+            return morsel.value if morsel else ""
+
+        def _admin_authenticated(self) -> bool:
+            if not self._admin_access_allowed():
+                return False
+            return is_valid_admin_session(self._cookie_value(ADMIN_SESSION_COOKIE))
+
+        def _admin_cookie_header(self, session_token: str) -> str:
+            parts = [
+                f"{ADMIN_SESSION_COOKIE}={session_token}",
+                "Path=/",
+                "HttpOnly",
+                "SameSite=Lax",
+                f"Max-Age={ADMIN_SESSION_TTL_SECONDS}",
+            ]
+            if self._is_https_request():
+                parts.append("Secure")
+            return "; ".join(parts)
+
+        def _admin_clear_cookie_header(self) -> str:
+            return (
+                f"{ADMIN_SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; "
+                "Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT"
+            )
+
+        def _admin_headers(self, extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+            headers = {
+                "Cache-Control": "no-store, no-cache, must-revalidate, private, max-age=0",
+                "Pragma": "no-cache",
+                "Expires": "0",
+                "X-Robots-Tag": "noindex, nofollow, noarchive",
+            }
+            headers.update(extra or {})
+            return headers
+
+        def _admin_forbidden(self) -> None:
+            self._json_response(
+                {
+                    "status": "failed",
+                    "error": "管理后台只允许 HTTPS 或本机访问",
+                },
+                status=403,
+                headers=self._admin_headers(),
+            )
+
+        def _admin_require_auth(self) -> bool:
+            if not self._admin_access_allowed():
+                self._admin_forbidden()
+                return False
+            if not self._admin_authenticated():
+                self._json_response(
+                    {
+                        "status": "failed",
+                        "error": "请先登录管理后台",
+                    },
+                    status=401,
+                    headers=self._admin_headers(),
+                )
+                return False
+            return True
+
+        def _handle_admin_login(self, params: Dict[str, str]) -> None:
+            if self.command != "POST":
+                self._json_response({"status": "failed", "error": "只支持 POST 登录"}, status=405)
+                return
+            if not self._admin_access_allowed():
+                self._admin_forbidden()
+                return
+            if not ADMIN_PASSWORD:
+                self._json_response(
+                    {
+                        "status": "failed",
+                        "error": "管理后台尚未配置密码",
+                    },
+                    status=503,
+                    headers=self._admin_headers(),
+                )
+                return
+            provided = params.get("password", "")
+            if not hmac.compare_digest(provided, ADMIN_PASSWORD):
+                self._json_response(
+                    {
+                        "status": "failed",
+                        "error": "密码错误",
+                    },
+                    status=401,
+                    headers=self._admin_headers(),
+                )
+                return
+            session_token = create_admin_session()
+            self._json_response(
+                {
+                    "status": "success",
+                    "expires_in_seconds": ADMIN_SESSION_TTL_SECONDS,
+                },
+                headers=self._admin_headers({"Set-Cookie": self._admin_cookie_header(session_token)}),
+            )
+
+        def _handle_admin_logout(self) -> None:
+            token = self._cookie_value(ADMIN_SESSION_COOKIE)
+            if token:
+                ADMIN_SESSIONS.pop(token, None)
+            self._json_response(
+                {"status": "success"},
+                headers=self._admin_headers({"Set-Cookie": self._admin_clear_cookie_header()}),
+            )
+
+        def _handle_admin_daily_token(self) -> None:
+            if self.command != "GET":
+                self._json_response({"status": "failed", "error": "只支持 GET"}, status=405)
+                return
+            if not self._admin_require_auth():
+                return
+            self._json_response(get_or_create_daily_token(), headers=self._admin_headers())
+
+        def _handle_admin_rotate_daily_token(self) -> None:
+            if self.command != "POST":
+                self._json_response({"status": "failed", "error": "只支持 POST"}, status=405)
+                return
+            if not self._admin_require_auth():
+                return
+            self._json_response(rotate_daily_token(), headers=self._admin_headers())
+
+        def _admin_page_response(self) -> None:
+            if not self._admin_access_allowed():
+                self._html_response(
+                    "<!doctype html><meta charset='utf-8'><title>禁止访问</title><h1>管理后台只允许 HTTPS 或本机访问</h1>",
+                    status=403,
+                    headers=self._admin_headers(),
+                )
+                return
+            self._html_response(_admin_page_html(), headers=self._admin_headers())
+
+        def _ensure_valid_verification_token(self, params: Dict[str, str]) -> bool:
+            if validate_daily_token(params):
+                return True
+            self._json_response(
+                {
+                    "status": "failed",
+                    "error": "今日验证码缺失或错误",
+                    "error_type": "daily_token_invalid",
+                    "user_tip": "今日验证码不正确或已过期。",
+                    "action_tip": "请向管理员获取当天 6 位数字验证码后再提交。",
+                },
+                status=403,
+            )
+            return False
 
         def _asset_response(self, path: str) -> bool:
             asset_map = {
@@ -4360,6 +4996,9 @@ def _run_http_server(
             return params.get("debug", "").strip().lower() in ("1", "true", "yes", "on")
 
         def _submit_zepp_step(self, params: Dict[str, str]) -> None:
+            if not self._ensure_valid_verification_token(params):
+                return
+
             user = params.get("account", "") or params.get("user", "")
             pwd = params.get("password", "") or params.get("pwd", "")
             debug_mode = self._debug_enabled(params)
@@ -4468,6 +5107,9 @@ def _run_http_server(
                     },
                     status=401,
                 )
+                return
+
+            if not self._ensure_valid_verification_token(params):
                 return
 
             if DEVICE_BIND_QR_DISTRIBUTION_PAUSED:
@@ -4587,6 +5229,26 @@ def _run_http_server(
                 "Expires": "0",
                 "X-Robots-Tag": "noindex, nofollow, noarchive",
             }
+
+            if path == "/admin":
+                self._admin_page_response()
+                return
+
+            if path == "/api/admin/login":
+                self._handle_admin_login(params)
+                return
+
+            if path == "/api/admin/logout":
+                self._handle_admin_logout()
+                return
+
+            if path == "/api/admin/daily-token":
+                self._handle_admin_daily_token()
+                return
+
+            if path == "/api/admin/daily-token/rotate":
+                self._handle_admin_rotate_daily_token()
+                return
 
             if path == "/api/device-bind/status":
                 self._json_response(device_bind_qr_status(), headers=no_store_headers)
@@ -4764,6 +5426,7 @@ def _run_http_server(
     init_tool_log_db()
     init_device_binding_db()
     init_zepp_token_cache_db()
+    get_or_create_daily_token()
     print(f"Serving on {scheme}://{host}:{port}")
     httpd.serve_forever()
 
