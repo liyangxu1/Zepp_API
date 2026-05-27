@@ -3084,6 +3084,35 @@ def _simple_page_html() -> str:
     .message-status.success { color: var(--success); }
     .message-status.failed { color: var(--danger); }
 
+    .copy-toast {
+      position: fixed;
+      left: 50%;
+      bottom: 24px;
+      z-index: 80;
+      min-width: min(88vw, 260px);
+      max-width: calc(100vw - 32px);
+      transform: translate(-50%, 18px);
+      opacity: 0;
+      pointer-events: none;
+      border-radius: 999px;
+      padding: 12px 16px;
+      background: #14532d;
+      color: #fff;
+      box-shadow: 0 18px 48px rgba(15, 23, 42, 0.22);
+      font-weight: 900;
+      text-align: center;
+      transition: opacity 0.18s ease, transform 0.18s ease;
+    }
+
+    .copy-toast.show {
+      opacity: 1;
+      transform: translate(-50%, 0);
+    }
+
+    .copy-toast.failed {
+      background: #9a3412;
+    }
+
     .message-list {
       display: grid;
       gap: 10px;
@@ -3469,6 +3498,7 @@ def _simple_page_html() -> str:
       </div>
     </main>
   </div>
+  <div class="copy-toast" id="copyToast" role="status" aria-live="polite" aria-atomic="true"></div>
 
   <script>
     const tools = [
@@ -3544,6 +3574,7 @@ def _simple_page_html() -> str:
     const messageList = document.getElementById('messageList')
     const refreshMessages = document.getElementById('refreshMessages')
     const copyGroupNumber = document.getElementById('copyGroupNumber')
+    const copyToast = document.getElementById('copyToast')
     const flowTabs = document.querySelectorAll('[data-flow]')
     const flowPanels = document.querySelectorAll('[data-flow-panel]')
     const verificationToken = document.getElementById('verificationToken')
@@ -3581,6 +3612,41 @@ def _simple_page_html() -> str:
         .replaceAll('>', '&gt;')
         .replaceAll('"', '&quot;')
         .replaceAll("'", '&#039;')
+    }
+
+    let copyToastTimer = null
+    function showCopyToast(message, state = 'success') {
+      window.clearTimeout(copyToastTimer)
+      copyToast.textContent = message
+      copyToast.className = `copy-toast show ${state === 'failed' ? 'failed' : ''}`.trim()
+      copyToastTimer = window.setTimeout(() => {
+        copyToast.className = 'copy-toast'
+      }, 2200)
+    }
+
+    async function copyTextToClipboard(text) {
+      if (navigator.clipboard && window.isSecureContext) {
+        try {
+          await navigator.clipboard.writeText(text)
+          return
+        } catch {}
+      }
+      const textarea = document.createElement('textarea')
+      textarea.value = text
+      textarea.setAttribute('readonly', '')
+      textarea.style.position = 'fixed'
+      textarea.style.left = '0'
+      textarea.style.top = '0'
+      textarea.style.width = '1px'
+      textarea.style.height = '1px'
+      textarea.style.opacity = '0'
+      document.body.appendChild(textarea)
+      textarea.focus()
+      textarea.select()
+      textarea.setSelectionRange(0, textarea.value.length)
+      const ok = document.execCommand('copy')
+      textarea.remove()
+      if (!ok) throw new Error('copy failed')
     }
 
     function normalizeLoginAccount(value) {
@@ -4110,11 +4176,13 @@ def _simple_page_html() -> str:
     copyGroupNumber.addEventListener('click', async () => {
       const groupNumber = document.getElementById('groupNumber').textContent.trim()
       try {
-        await navigator.clipboard.writeText(groupNumber)
+        await copyTextToClipboard(groupNumber)
         copyGroupNumber.textContent = '已复制'
+        showCopyToast(`QQ群号 ${groupNumber} 已复制`)
         setTimeout(() => { copyGroupNumber.textContent = '复制 QQ 群号' }, 1500)
       } catch {
         copyGroupNumber.textContent = groupNumber
+        showCopyToast('复制失败，请手动复制群号', 'failed')
       }
     })
 
@@ -4362,6 +4430,35 @@ def _admin_page_html() -> str:
     .status.failed { color: var(--danger); }
     .hidden { display: none !important; }
 
+    .copy-toast {
+      position: fixed;
+      left: 50%;
+      bottom: 24px;
+      z-index: 80;
+      min-width: min(88vw, 260px);
+      max-width: calc(100vw - 32px);
+      transform: translate(-50%, 18px);
+      opacity: 0;
+      pointer-events: none;
+      border-radius: 999px;
+      padding: 12px 16px;
+      background: #14532d;
+      color: #fff;
+      box-shadow: 0 18px 48px rgba(15, 23, 42, 0.22);
+      font-weight: 900;
+      text-align: center;
+      transition: opacity 0.18s ease, transform 0.18s ease;
+    }
+
+    .copy-toast.show {
+      opacity: 1;
+      transform: translate(-50%, 0);
+    }
+
+    .copy-toast.failed {
+      background: #9a3412;
+    }
+
     @media (max-width: 560px) {
       body { padding: 14px; }
       .panel { padding: 18px; }
@@ -4407,6 +4504,7 @@ def _admin_page_html() -> str:
       <div class="status" id="dashboardStatus"></div>
     </section>
   </main>
+  <div class="copy-toast" id="copyToast" role="status" aria-live="polite" aria-atomic="true"></div>
 
   <script>
     const loginPanel = document.getElementById('loginPanel')
@@ -4421,10 +4519,46 @@ def _admin_page_html() -> str:
     const reloadToken = document.getElementById('reloadToken')
     const copyToken = document.getElementById('copyToken')
     const logoutBtn = document.getElementById('logoutBtn')
+    const copyToast = document.getElementById('copyToast')
 
     function setStatus(element, text, state = '') {
       element.className = `status ${state}`.trim()
       element.textContent = text
+    }
+
+    let copyToastTimer = null
+    function showCopyToast(message, state = 'success') {
+      window.clearTimeout(copyToastTimer)
+      copyToast.textContent = message
+      copyToast.className = `copy-toast show ${state === 'failed' ? 'failed' : ''}`.trim()
+      copyToastTimer = window.setTimeout(() => {
+        copyToast.className = 'copy-toast'
+      }, 2200)
+    }
+
+    async function copyTextToClipboard(text) {
+      if (navigator.clipboard && window.isSecureContext) {
+        try {
+          await navigator.clipboard.writeText(text)
+          return
+        } catch {}
+      }
+      const textarea = document.createElement('textarea')
+      textarea.value = text
+      textarea.setAttribute('readonly', '')
+      textarea.style.position = 'fixed'
+      textarea.style.left = '0'
+      textarea.style.top = '0'
+      textarea.style.width = '1px'
+      textarea.style.height = '1px'
+      textarea.style.opacity = '0'
+      document.body.appendChild(textarea)
+      textarea.focus()
+      textarea.select()
+      textarea.setSelectionRange(0, textarea.value.length)
+      const ok = document.execCommand('copy')
+      textarea.remove()
+      if (!ok) throw new Error('copy failed')
     }
 
     function showLogin() {
@@ -4501,10 +4635,14 @@ def _admin_page_html() -> str:
 
     copyToken.addEventListener('click', async () => {
       try {
-        await navigator.clipboard.writeText(tokenValue.textContent.trim())
+        await copyTextToClipboard(tokenValue.textContent.trim())
         setStatus(dashboardStatus, '验证码已复制。', 'success')
+        showCopyToast('今日验证码已复制')
+        copyToken.textContent = '已复制'
+        setTimeout(() => { copyToken.textContent = '复制验证码' }, 1500)
       } catch {
         setStatus(dashboardStatus, `当前验证码：${tokenValue.textContent.trim()}`)
+        showCopyToast('复制失败，请手动复制验证码', 'failed')
       }
     })
 
