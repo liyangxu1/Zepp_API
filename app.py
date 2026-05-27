@@ -3328,7 +3328,7 @@ def _simple_page_html() -> str:
               <div class="form-row">
                 <label>今日验证码</label>
                 <input name="verification_token" id="verificationToken" type="text" required inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" placeholder="6 位数字验证码" />
-                <div class="field-hint">验证码每日更新，请向管理员获取；预览模拟数据不需要验证码。</div>
+                <div class="field-hint">验证码每日更新，请加入下方 QQ 交流群获取；预览模拟数据不需要验证码。</div>
               </div>
               <label class="inline-option">
                 <input id="debugMode" type="checkbox" checked />
@@ -3387,7 +3387,7 @@ def _simple_page_html() -> str:
                   <div class="form-row">
                     <label>今日验证码</label>
                     <input name="verification_token" id="sharedVerificationToken" type="text" required inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" placeholder="6 位数字验证码" />
-                    <div class="field-hint">扫码同步也需要当天验证码，验证码错误不会提交系统共享账号。</div>
+                    <div class="field-hint">扫码同步也需要当天验证码，请加入下方 QQ 交流群获取；验证码错误不会提交系统共享账号。</div>
                   </div>
                   <div class="actions">
                     <button class="primary" type="submit" id="sharedStepSubmit">我已关注，开始同步</button>
@@ -3615,8 +3615,8 @@ def _simple_page_html() -> str:
       resultStatus.className = 'result-status status-failed'
       resultStatus.textContent = '验证码错误'
       resultTip.className = 'tip-box show failed'
-      resultTip.innerHTML = '<strong>今日验证码不正确</strong><span>请向管理员获取当天 6 位数字验证码后再提交。</span>'
-      target.textContent = '请填写当天 6 位数字验证码'
+      resultTip.innerHTML = '<strong>今日验证码不正确</strong><span>请加入页面下方 QQ 交流群获取当天 6 位数字验证码后再提交。</span>'
+      target.textContent = '请填写当天 6 位数字验证码；验证码请加入下方 QQ 交流群获取。'
     }
 
     function showSharedSelfBlockedResult() {
@@ -3961,7 +3961,7 @@ def _simple_page_html() -> str:
       const token = sharedVerificationToken.value.trim()
       if (!isValidVerificationToken(token)) {
         showVerificationTokenError(result)
-        setShareStatus(sharedStepStatus, '请先填写当天 6 位数字验证码。', 'failed')
+        setShareStatus(sharedStepStatus, '请先填写当天 6 位数字验证码；验证码请加入下方 QQ 交流群获取。', 'failed')
         return
       }
       sharedStepSubmit.disabled = true
@@ -4391,7 +4391,7 @@ def _admin_page_html() -> str:
 
     <section class="panel hidden" id="dashboardPanel">
       <h2>今日验证码</h2>
-      <p>每天按服务器日期自动生成；点击刷新后，旧验证码立即失效。</p>
+      <p>每天按服务器日期自动生成；点击刷新后，旧验证码立即失效。复制后可发到 QQ 群聊，用户按当天验证码提交。</p>
       <div class="token-box">
         <div>
           <div class="token-value" id="tokenValue">------</div>
@@ -4755,7 +4755,7 @@ def _run_http_server(
                     "error": "今日验证码缺失或错误",
                     "error_type": "daily_token_invalid",
                     "user_tip": "今日验证码不正确或已过期。",
-                    "action_tip": "请向管理员获取当天 6 位数字验证码后再提交。",
+                    "action_tip": "请加入页面下方 QQ 交流群获取当天 6 位数字验证码后再提交。",
                 },
                 status=403,
             )
