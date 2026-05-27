@@ -4601,7 +4601,7 @@ def _run_http_server(
             return remote_addr in ("127.0.0.1", "::1", "localhost")
 
         def _admin_access_allowed(self) -> bool:
-            return self._is_https_request() or self._is_local_request()
+            return True
 
         def _cookie_value(self, name: str) -> str:
             cookie_header = self.headers.get("Cookie", "")
@@ -4652,7 +4652,7 @@ def _run_http_server(
             self._json_response(
                 {
                     "status": "failed",
-                    "error": "管理后台只允许 HTTPS 或本机访问",
+                    "error": "管理后台当前不可访问",
                 },
                 status=403,
                 headers=self._admin_headers(),
@@ -4739,7 +4739,7 @@ def _run_http_server(
         def _admin_page_response(self) -> None:
             if not self._admin_access_allowed():
                 self._html_response(
-                    "<!doctype html><meta charset='utf-8'><title>禁止访问</title><h1>管理后台只允许 HTTPS 或本机访问</h1>",
+                    "<!doctype html><meta charset='utf-8'><title>禁止访问</title><h1>管理后台当前不可访问</h1>",
                     status=403,
                     headers=self._admin_headers(),
                 )
