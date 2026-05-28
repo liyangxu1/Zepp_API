@@ -4692,11 +4692,16 @@ def _run_http_server(
 
         def get_request(self):
             client_socket, client_address = self.socket.accept()
+            client_socket.settimeout(20)
             if self.ssl_context is None:
                 return client_socket, client_address
 
             try:
+                client_socket.settimeout(3)
                 prefix = client_socket.recv(1, socket.MSG_PEEK)
+                if not prefix:
+                    client_socket.close()
+                    raise OSError("客户端在发送请求前已断开")
             except OSError:
                 client_socket.close()
                 raise
@@ -4704,6 +4709,7 @@ def _run_http_server(
             # TLS 握手的第一字节是 0x16；普通 HTTP 请求保持原始 socket。
             if prefix == b"\x16":
                 client_socket = self.ssl_context.wrap_socket(client_socket, server_side=True)
+            client_socket.settimeout(20)
             return client_socket, client_address
 
     class StepHandler(BaseHTTPRequestHandler):
