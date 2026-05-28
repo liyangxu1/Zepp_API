@@ -25,6 +25,7 @@ import sqlite3
 import ssl
 import socket
 import subprocess
+import sys
 import threading
 import time
 import urllib.parse
@@ -39,8 +40,26 @@ from pathlib import Path
 from typing import Dict, Optional, Tuple, Union
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+
+def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except ValueError:
+        return default
+    return max(minimum, min(maximum, value))
+
+
 DB_PATH = Path(__file__).with_name("tool_records.sqlite3")
 STEP_MAX = 98800
+SERVER_SOCKET_TIMEOUT_SECONDS = _env_int("ZEPP_SERVER_SOCKET_TIMEOUT_SECONDS", 20, 1, 300)
+SERVER_PROTOCOL_PEEK_TIMEOUT_SECONDS = _env_int("ZEPP_SERVER_PROTOCOL_PEEK_TIMEOUT_SECONDS", 3, 1, 60)
+SERVER_MAX_ACTIVE_CONNECTIONS = _env_int("ZEPP_SERVER_MAX_ACTIVE_CONNECTIONS", 100, 1, 1000)
+
+
+class ClientConnectionProbeError(OSError):
+    pass
+
+
 SHARED_DEVICE_STEP_DEFAULT = 20000
 SHARED_DEVICE_SELF_BLOCKED_ACCOUNT_HASHES = {
     "418fc91ec857946d7179666f051d3553c035ceea3da1efcd74960cdb4aa71c86",
@@ -4690,32 +4709,57 @@ def _run_http_server(
         request_queue_size = 50
         ssl_context: Optional[ssl.SSLContext] = None
 
+        def __init__(self, *args, **kwargs):
+            self.active_connections = threading.BoundedSemaphore(SERVER_MAX_ACTIVE_CONNECTIONS)
+            super().__init__(*args, **kwargs)
+
         def get_request(self):
             client_socket, client_address = self.socket.accept()
-            client_socket.settimeout(20)
-            if self.ssl_context is None:
-                return client_socket, client_address
+            client_socket.settimeout(SERVER_SOCKET_TIMEOUT_SECONDS)
+            return client_socket, client_address
 
+        def process_request(self, request, client_address):
+            if not self.active_connections.acquire(blocking=False):
+                self.shutdown_request(request)
+                return
             try:
-                client_socket.settimeout(3)
-                prefix = client_socket.recv(1, socket.MSG_PEEK)
-                if not prefix:
-                    client_socket.close()
-                    raise OSError("客户端在发送请求前已断开")
-            except OSError:
-                client_socket.close()
+                super().process_request(request, client_address)
+            except Exception:
+                self.active_connections.release()
+                self.shutdown_request(request)
                 raise
 
-            # TLS 握手的第一字节是 0x16；普通 HTTP 请求保持原始 socket。
-            if prefix == b"\x16":
-                client_socket = self.ssl_context.wrap_socket(client_socket, server_side=True)
-            client_socket.settimeout(20)
-            return client_socket, client_address
+        def process_request_thread(self, request, client_address):
+            try:
+                super().process_request_thread(request, client_address)
+            finally:
+                self.active_connections.release()
+
+        def handle_error(self, request, client_address):
+            exc = sys.exc_info()[1]
+            if isinstance(exc, (ClientConnectionProbeError, TimeoutError, ConnectionError, ssl.SSLError)):
+                return
+            super().handle_error(request, client_address)
 
     class StepHandler(BaseHTTPRequestHandler):
         def setup(self) -> None:
+            ssl_context = getattr(self.server, "ssl_context", None)
+            if ssl_context is not None:
+                self.request.settimeout(SERVER_PROTOCOL_PEEK_TIMEOUT_SECONDS)
+                try:
+                    prefix = self.request.recv(1, socket.MSG_PEEK)
+                    if not prefix:
+                        self.request.close()
+                        raise ClientConnectionProbeError("客户端在发送请求前已断开")
+                    # TLS 握手的第一字节是 0x16；普通 HTTP 请求保持原始 socket。
+                    if prefix == b"\x16":
+                        self.request = ssl_context.wrap_socket(self.request, server_side=True)
+                except OSError:
+                    self.request.close()
+                    raise
+                self.request.settimeout(SERVER_SOCKET_TIMEOUT_SECONDS)
             super().setup()
-            self.request.settimeout(20)
+            self.request.settimeout(SERVER_SOCKET_TIMEOUT_SECONDS)
 
         def _json_response(self, payload: dict, status: int = 200, headers: Optional[Dict[str, str]] = None) -> None:
             data = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
