@@ -2903,6 +2903,7 @@ def _simple_page_html() -> str:
     .tip-box.failed { border-color: #fed7aa; background: #fff7ed; color: #9a3412; }
     .tip-box strong { display: block; margin-bottom: 4px; }
     .tip-box span { display: block; color: inherit; opacity: 0.88; }
+    .tip-box .tip-action { margin-top: 10px; }
 
     .log-head {
       display: flex;
@@ -3212,8 +3213,9 @@ def _simple_page_html() -> str:
         </div>
       </div>
       <div class="side-section-title">工具分类</div>
-      <button class="category active" data-category="all"><span>全部工具</span><span class="category-count">7</span></button>
+      <button class="category active" data-category="all"><span>全部工具</span><span class="category-count">8</span></button>
       <button class="category" data-category="life"><span>生活工具</span><span class="category-count">1</span></button>
+      <button class="category" data-category="promotion"><span>推广工具</span><span class="category-count">1</span></button>
       <button class="category" data-category="dev"><span>开发工具</span><span class="category-count">3</span></button>
       <button class="category" data-category="text"><span>文本工具</span><span class="category-count">1</span></button>
       <button class="category" data-category="image"><span>图片工具</span><span class="category-count">1</span></button>
@@ -3236,12 +3238,12 @@ def _simple_page_html() -> str:
         <section class="section-head">
           <div>
             <h1>工具导航</h1>
-            <p class="section-desc">先把已跑通的微信步数修改放进工具站框架，也支持跳转到独立工具页面。</p>
+            <p class="section-desc">先把已跑通的微信步数修改放进工具站框架，也支持跳转到独立工具页面和人工对接服务。</p>
           </div>
           <div class="stats">
-            <div class="stat"><strong>2</strong><span>可用工具</span></div>
+            <div class="stat"><strong>2</strong><span>自助工具</span></div>
+            <div class="stat"><strong>1</strong><span>人工对接</span></div>
             <div class="stat"><strong>5</strong><span>预留位置</span></div>
-            <div class="stat"><strong>本地</strong><span>运行环境</span></div>
           </div>
         </section>
 
@@ -3255,14 +3257,14 @@ def _simple_page_html() -> str:
               <div class="group-meta">
                 <div class="group-avatar">喵</div>
                 <div>
-                  <div class="group-name">接待喵的小窝</div>
-                  <div class="group-number">QQ 群号：<span id="groupNumber">1084427315</span></div>
+                  <div class="group-name">__QQ_GROUP_NAME__</div>
+                  <div class="group-number">QQ 群号：<span id="groupNumber">__QQ_GROUP_NUMBER__</span></div>
                 </div>
               </div>
               <a class="scroll-tip" href="#toolPanel">使用工具请向下滑动</a>
               <button class="ghost" type="button" id="copyGroupNumber">复制 QQ 群号</button>
             </div>
-            <img class="qq-qr" src="/assets/qq-group.jpg" alt="接待喵的小窝 QQ 群二维码" />
+            <img class="qq-qr" src="/assets/qq-group.jpg" alt="__QQ_GROUP_NAME__ QQ 群二维码" />
           </div>
         </section>
 
@@ -3464,6 +3466,7 @@ def _simple_page_html() -> str:
                 <label>相关工具</label>
                 <select name="tool_id">
                   <option value="zepp-step">微信步数修改</option>
+                  <option value="douyin-growth">抖音点赞涨粉</option>
                   <option value="other">其他工具 / 新功能建议</option>
                 </select>
               </div>
@@ -3527,6 +3530,15 @@ def _simple_page_html() -> str:
         title: '微信步数修改',
         badge: '可用',
         desc: '有设备走 Zepp Life 提交；无设备走扫码绑定处理。',
+        active: true,
+      },
+      {
+        id: 'douyin-growth',
+        category: 'promotion',
+        title: '抖音点赞涨粉',
+        badge: '人工对接',
+        purpose: '短视频平台点赞推流、涨粉推流咨询',
+        desc: '面向抖音等短视频平台，当前暂未接入官方接口；需要推广请加入 QQ 群联系人工处理。',
         active: true,
       },
       {
@@ -3614,6 +3626,8 @@ def _simple_page_html() -> str:
     const sharedNextStepHint = document.getElementById('sharedNextStepHint')
     const stepMax = 98800
     const toolApiKey = __ZEPP_TOOL_API_KEY__
+    const qqGroupName = __QQ_GROUP_NAME_JSON__
+    const qqGroupNumber = __QQ_GROUP_NUMBER_JSON__
     const sharedSelfBlockedAccounts = new Set(['3313696759@proton.me'])
     let currentCategory = 'all'
     let qrConfigured = false
@@ -3736,6 +3750,38 @@ def _simple_page_html() -> str:
       resultTip.innerHTML = `<strong>${escapeHtml(title)}</strong><span>${escapeHtml(action)}</span>`
     }
 
+    function showDouyinGrowthIntro() {
+      resultStatus.className = 'result-status status-idle'
+      resultStatus.textContent = '人工对接'
+      resultTip.className = 'tip-box show success'
+      resultTip.innerHTML = `
+        <strong>抖音点赞涨粉</strong>
+        <span>当前未接入抖音官方接口，暂不支持页面自助下单。</span>
+        <span>如需点赞推流、涨粉推流或短视频推广方案，请加入 ${escapeHtml(qqGroupName)} QQ 群联系。</span>
+        <button class="ghost tip-action" type="button" id="copyPromotionGroupNumber">复制 QQ 群号</button>
+      `
+      result.textContent = [
+        '服务说明',
+        '- 适用平台：抖音等短视频平台',
+        '- 支持方向：点赞推流、涨粉推流、短视频推广方案咨询',
+        '- 当前状态：官方接口待接入，暂不支持页面自助下单或自动执行推广',
+        `- 联系方式：加入 QQ 群 ${qqGroupNumber}，说明账号、作品链接和推广目标后人工沟通`,
+      ].join('\\n')
+      const copyPromotionGroupNumber = document.getElementById('copyPromotionGroupNumber')
+      copyPromotionGroupNumber?.addEventListener('click', async () => {
+        try {
+          await copyTextToClipboard(qqGroupNumber)
+          copyPromotionGroupNumber.textContent = '已复制'
+          showCopyToast(`QQ群号 ${qqGroupNumber} 已复制`)
+          setTimeout(() => { copyPromotionGroupNumber.textContent = '复制 QQ 群号' }, 1500)
+        } catch {
+          copyPromotionGroupNumber.textContent = qqGroupNumber
+          showCopyToast('复制失败，请手动复制群号', 'failed')
+        }
+      })
+      document.getElementById('toolPanel').scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }
+
     function renderTools() {
       const keyword = searchInput.value.trim().toLowerCase()
       const visible = tools.filter((tool) => {
@@ -3764,6 +3810,10 @@ def _simple_page_html() -> str:
           const tool = tools.find((item) => item.id === toolId)
           if (tool?.url) {
             window.location.href = tool.url
+            return
+          }
+          if (toolId === 'douyin-growth') {
+            showDouyinGrowthIntro()
             return
           }
           if (toolId !== 'zepp-step') {
@@ -4326,7 +4376,15 @@ def _simple_page_html() -> str:
   </script>
 </body>
 </html>
-""".replace("__ZEPP_TOOL_API_KEY__", json.dumps(TOOL_API_KEY))
+""".replace("__ZEPP_TOOL_API_KEY__", json.dumps(TOOL_API_KEY)).replace(
+    "__QQ_GROUP_NAME_JSON__", json.dumps(QQ_GROUP_NAME)
+).replace(
+    "__QQ_GROUP_NUMBER_JSON__", json.dumps(QQ_GROUP_NUMBER)
+).replace(
+    "__QQ_GROUP_NAME__", QQ_GROUP_NAME
+).replace(
+    "__QQ_GROUP_NUMBER__", QQ_GROUP_NUMBER
+)
 
 
 def _admin_page_html() -> str:
