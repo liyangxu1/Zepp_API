@@ -32,12 +32,14 @@ import time
 import urllib.parse
 import urllib.request
 import uuid
+import zipfile
 from urllib.error import HTTPError
 from datetime import datetime
 from http.cookies import SimpleCookie
 from email.parser import BytesParser
 from email.policy import default as email_policy
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Dict, Optional, Tuple, Union
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -1711,19 +1713,28 @@ def extract_baidu_share_payload(raw_text: str) -> dict:
             "need_resubmit": True,
         }
 
-    share_url = ""
+    share_urls = []
     for match in BAIDU_SHARE_URL_RE.finditer(text):
-        share_url = normalize_baidu_share_url(match.group(1))
-        if share_url:
-            break
+        share_url_candidate = normalize_baidu_share_url(match.group(1))
+        if share_url_candidate and share_url_candidate not in share_urls:
+            share_urls.append(share_url_candidate)
 
-    if not share_url:
+    if not share_urls:
         return {
             "ok": False,
             "error": "没有解析到有效的百度网盘分享链接，请重新提交。",
             "need_resubmit": True,
         }
 
+    if len(share_urls) > 1:
+        return {
+            "ok": False,
+            "error": "当前只支持一个百度网盘分享链接，请删除多余链接后重新提交。",
+            "need_resubmit": True,
+            "share_url_count": len(share_urls),
+        }
+
+    share_url = share_urls[0]
     parsed = urllib.parse.urlparse(share_url)
     query = urllib.parse.parse_qs(parsed.query)
     extraction_code = (query.get("pwd", [""])[-1] or "").strip()
@@ -1844,6 +1855,7 @@ def baidu_share_status_meta(status: str) -> dict:
 
 def public_baidu_share_job(row: dict) -> dict:
     status_meta = baidu_share_status_meta(str(row.get("status") or "queued"))
+    archive_ready = status_meta["status"] == "completed" and baidu_share_job_has_files(str(row.get("server_save_path") or ""))
     return {
         "id": row.get("id"),
         "job_id": row.get("job_id"),
@@ -1854,6 +1866,8 @@ def public_baidu_share_job(row: dict) -> dict:
         "extraction_code_masked": row.get("extraction_code_masked"),
         "netdisk_save_path": row.get("netdisk_save_path"),
         "server_save_path": row.get("server_save_path"),
+        "archive_ready": archive_ready,
+        "archive_name": f"{row.get('job_id')}.zip" if archive_ready else "",
         "remote_addr": row.get("remote_addr") or "",
     }
 
@@ -1875,6 +1889,7 @@ def record_baidu_share_job(
     payload = {
         "stage": "recorded",
         "message": "任务已记录，等待后续接入 BaiduPCS-Go worker 执行转存和下载。",
+        "download_token": secrets.token_urlsafe(24),
     }
     row = {
         "job_id": job_id,
@@ -1921,6 +1936,88 @@ def record_baidu_share_job(
         )
         row["id"] = cursor.lastrowid
     return row
+
+
+def parse_baidu_job_response_json(row: dict) -> dict:
+    try:
+        return json.loads(str(row.get("response_json") or "{}"))
+    except json.JSONDecodeError:
+        return {}
+
+
+def get_baidu_share_job(job_id: str) -> Optional[dict]:
+    safe_job_id = clean_message_text(job_id, 120)
+    if not safe_job_id:
+        return None
+    init_baidu_share_job_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            """
+            SELECT id, job_id, created_at, updated_at, status, raw_text, share_url,
+                   share_url_masked, extraction_code, extraction_code_masked,
+                   netdisk_save_path, server_save_path, remote_addr, user_agent,
+                   response_json
+            FROM baidu_share_jobs
+            WHERE job_id = ?
+            """,
+            (safe_job_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def baidu_share_job_download_token(row: dict) -> str:
+    payload = parse_baidu_job_response_json(row)
+    return str(payload.get("download_token") or "")
+
+
+def baidu_share_job_has_files(server_save_path: str) -> bool:
+    root = Path(server_save_path or "").expanduser()
+    if not root.exists() or not root.is_dir():
+        return False
+    for item in root.rglob("*"):
+        if item.is_symlink():
+            continue
+        if item.is_file():
+            return True
+    return False
+
+
+def baidu_share_job_file_entries(server_save_path: str) -> list:
+    root = Path(server_save_path or "").expanduser().resolve(strict=False)
+    if not root.exists() or not root.is_dir():
+        return []
+    entries = []
+    for item in sorted(root.rglob("*")):
+        if item.is_symlink() or not item.is_file():
+            continue
+        resolved = item.resolve(strict=False)
+        try:
+            resolved.relative_to(root)
+        except ValueError:
+            continue
+        entries.append((resolved, resolved.relative_to(root).as_posix()))
+    return entries
+
+
+def create_baidu_share_zip(job: dict) -> Tuple[Path, int]:
+    entries = baidu_share_job_file_entries(str(job.get("server_save_path") or ""))
+    if not entries:
+        raise FileNotFoundError("下载文件尚未生成")
+    tmp = NamedTemporaryFile(prefix=f"{job.get('job_id', 'baidu-share')}-", suffix=".zip", delete=False)
+    zip_path = Path(tmp.name)
+    tmp.close()
+    try:
+        with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
+            for source, archive_name in entries:
+                zf.write(source, archive_name)
+        return zip_path, zip_path.stat().st_size
+    except Exception:
+        try:
+            zip_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
 
 
 def list_baidu_share_jobs(limit: int = 20) -> list:
@@ -2969,6 +3066,33 @@ def _simple_page_html() -> str:
       color: var(--text);
     }
 
+    .job-download {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+      margin-top: 2px;
+    }
+
+    .download-link {
+      display: inline-flex;
+      align-items: center;
+      min-height: 32px;
+      border-radius: 8px;
+      padding: 0 10px;
+      background: #0f766e;
+      color: #fff;
+      font-size: 12px;
+      font-weight: 900;
+      text-decoration: none;
+    }
+
+    .download-note {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
     .job-item-path {
       color: var(--muted);
       font-size: 12px;
@@ -3884,7 +4008,7 @@ def _simple_page_html() -> str:
               <div class="form-row">
                 <label>分享文本</label>
                 <textarea name="raw_text" id="baiduRawText" required maxlength="5000" placeholder="直接粘贴百度网盘分享内容，例如：链接：https://pan.baidu.com/s/1xxxx 提取码：abcd"></textarea>
-                <div class="field-hint">支持从整段文字里自动提取 pan.baidu.com 链接和 4 位提取码；如果没解析到，会提示重新提交。</div>
+                <div class="field-hint">当前只支持一个百度网盘链接；可从整段文字里自动提取 pan.baidu.com 链接和 4 位提取码，多个链接会要求重新提交。</div>
               </div>
               <div class="form-row">
                 <label>网盘保存根目录</label>
@@ -3999,7 +4123,7 @@ def _simple_page_html() -> str:
         title: '百度网盘中转下载',
         badge: '记录中',
         purpose: '分享链接解析、保存路径记录、等待下载队列',
-        desc: '粘贴整段百度网盘分享文本，自动提取链接和提取码，记录后续转存与服务器下载路径。',
+        desc: '粘贴单个百度网盘分享文本，自动提取链接和提取码，完成后打包成一个 ZIP 下载。',
         active: true,
       },
       {
@@ -4346,6 +4470,42 @@ def _simple_page_html() -> str:
       }, 420)
     }
 
+    function baiduJobTokenKey(jobId) {
+      return `baiduShareJobToken:${jobId}`
+    }
+
+    function saveBaiduJobToken(jobId, token) {
+      if (!jobId || !token) return
+      try {
+        window.localStorage.setItem(baiduJobTokenKey(jobId), token)
+      } catch {}
+    }
+
+    function getBaiduJobToken(jobId) {
+      if (!jobId) return ''
+      try {
+        return window.localStorage.getItem(baiduJobTokenKey(jobId)) || ''
+      } catch {
+        return ''
+      }
+    }
+
+    function renderBaiduDownloadAction(job) {
+      if (job.status !== 'completed') {
+        return '<div class="job-download"><span class="download-note">完成后这里会显示 ZIP 下载按钮。</span></div>'
+      }
+      if (!job.archive_ready) {
+        return '<div class="job-download"><span class="download-note">任务已完成，但服务器文件还未准备好打包。</span></div>'
+      }
+      const token = getBaiduJobToken(job.job_id)
+      if (!token) {
+        return '<div class="job-download"><span class="download-note">缺少本机下载凭证，请使用提交该任务的浏览器下载。</span></div>'
+      }
+      const href = `/api/tools/baidu-share/jobs/${encodeURIComponent(job.job_id)}/download.zip?token=${encodeURIComponent(token)}`
+      const name = job.archive_name || `${job.job_id}.zip`
+      return `<div class="job-download"><a class="download-link" href="${href}">下载 ZIP</a><span class="download-note">${escapeHtml(name)}</span></div>`
+    }
+
     function renderBaiduJobs(jobs) {
       baiduJobsList.innerHTML = jobs.length ? jobs.map((job) => `
         <article class="job-item">
@@ -4357,6 +4517,7 @@ def _simple_page_html() -> str:
           <div class="job-item-state">当前状态：<strong>${escapeHtml(job.status_label || job.status || '排队中')}</strong><span>${escapeHtml(job.status_detail || '等待后台更新任务状态。')}</span></div>
           <div class="job-item-path">网盘：${escapeHtml(job.netdisk_save_path || '-')}</div>
           <div class="job-item-path">服务器：${escapeHtml(job.server_save_path || '-')}</div>
+          ${renderBaiduDownloadAction(job)}
         </article>
       `).join('') : '<div class="empty-card">暂无百度网盘任务。</div>'
     }
@@ -4881,6 +5042,7 @@ def _simple_page_html() -> str:
         resultTip.className = 'tip-box show success'
         resultTip.innerHTML = '<strong>任务已进入队列</strong><span>当前状态为“排队中”；接入 worker 后会继续更新为“转存中 / 下载中 / 已完成 / 失败”。</span>'
         setBaiduStatus(`任务已记录：${data.job?.job_id || ''}，当前状态：${data.job?.status_label || '排队中'}`, 'success')
+        saveBaiduJobToken(data.job?.job_id, data.download_token)
         if (data.job) {
           baiduPathPreview.innerHTML = `
             <code>网盘任务目录：${escapeHtml(data.job.netdisk_save_path || '-')}</code>
@@ -5969,11 +6131,13 @@ def _run_http_server(
                 user_agent=self.headers.get("User-Agent", ""),
             )
             public_job = public_baidu_share_job(job)
+            download_token = baidu_share_job_download_token(job)
             self._json_response(
                 {
                     "status": "success",
                     "message": "百度网盘分享任务已记录，后续 worker 会按该记录执行转存和下载。",
                     "job": public_job,
+                    "download_token": download_token,
                     "parsed": {
                         "share_url": job["share_url"],
                         "share_url_masked": job["share_url_masked"],
@@ -5983,6 +6147,65 @@ def _run_http_server(
                     "next_step": "下一步接入 BaiduPCS-Go worker：transfer 到 netdisk_save_path，再 download --saveto 到 server_save_path。",
                 }
             )
+
+        def _download_baidu_share_zip(self, job_id: str, params: Dict[str, str]) -> None:
+            if self.command != "GET":
+                self._json_response({"status": "failed", "error": "请使用 GET 下载 ZIP"}, status=405)
+                return
+
+            job = get_baidu_share_job(job_id)
+            if not job:
+                self._json_response({"status": "failed", "error": "任务不存在"}, status=404)
+                return
+
+            token = params.get("token", "").strip()
+            expected_token = baidu_share_job_download_token(job)
+            if not expected_token or not hmac.compare_digest(token, expected_token):
+                self._json_response({"status": "failed", "error": "下载凭证无效或已缺失"}, status=403)
+                return
+
+            status = str(job.get("status") or "")
+            if status != "completed":
+                meta = baidu_share_status_meta(status)
+                self._json_response(
+                    {
+                        "status": "failed",
+                        "error": "任务尚未完成，暂不能下载 ZIP",
+                        "job_status": meta["status"],
+                        "job_status_label": meta["status_label"],
+                        "job_status_detail": meta["status_detail"],
+                    },
+                    status=409,
+                )
+                return
+
+            zip_path = None
+            try:
+                zip_path, zip_size = create_baidu_share_zip(job)
+                filename = f"{job.get('job_id') or 'baidu-share'}.zip"
+                safe_filename = urllib.parse.quote(filename)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/zip")
+                self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{safe_filename}")
+                self.send_header("Content-Length", str(zip_size))
+                self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, private, max-age=0")
+                self.end_headers()
+                with zip_path.open("rb") as fh:
+                    while True:
+                        chunk = fh.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+            except FileNotFoundError as exc:
+                self._json_response({"status": "failed", "error": str(exc)}, status=404)
+            except BrokenPipeError:
+                return
+            finally:
+                if zip_path:
+                    try:
+                        zip_path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
 
         def _submit_zepp_step(self, params: Dict[str, str]) -> None:
             if not self._ensure_valid_verification_token(params):
@@ -6341,6 +6564,11 @@ def _run_http_server(
 
             if path == "/api/tools/baidu-share/parse":
                 self._parse_baidu_share_text(params)
+                return
+
+            baidu_zip_match = re.fullmatch(r"/api/tools/baidu-share/jobs/([^/]+)/download\.zip", path)
+            if baidu_zip_match:
+                self._download_baidu_share_zip(urllib.parse.unquote(baidu_zip_match.group(1)), params)
                 return
 
             if path == "/api/tools/baidu-share/jobs":

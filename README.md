@@ -86,7 +86,7 @@ ZEPP_TOOL_API_KEY="your-key" python app.py --serve --host 0.0.0.0 --port 8000
 
 ### 5) 百度网盘中转任务记录
 
-页面已接入“百度网盘中转下载”入口。当前版本只做分享文本解析和任务落库，不会直接触发真实转存或下载；后续 worker 可按记录调用 BaiduPCS-Go。
+页面已接入“百度网盘中转下载”入口。当前版本只支持一个分享链接，先做分享文本解析和任务落库，不会直接触发真实转存或下载；后续 worker 可按记录调用 BaiduPCS-Go。
 
 自动解析接口：
 
@@ -112,6 +112,8 @@ Content-Type: application/json
 }
 ```
 
+提交成功后接口会返回 `download_token`。前端会把该 token 存在提交用户当前浏览器的 `localStorage` 中；任务完成后用它请求 ZIP 下载，公开日志不会展示完整链接、提取码或下载凭证。
+
 最近记录接口：
 
 ```text
@@ -130,6 +132,14 @@ transfer_failed 转存失败
 canceled        已取消
 expired         已过期
 ```
+
+任务完成后的 ZIP 下载接口：
+
+```text
+GET /api/tools/baidu-share/jobs/{job_id}/download.zip?token=<download_token>
+```
+
+下载接口只在任务状态为 `completed`、服务器任务目录存在文件、且 token 正确时返回 ZIP。多文件会统一打包成一个 ZIP 发送给用户。
 
 默认目录可通过环境变量覆盖：
 
