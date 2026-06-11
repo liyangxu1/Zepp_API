@@ -118,6 +118,19 @@ Content-Type: application/json
 GET /api/tools/baidu-share/jobs?limit=20
 ```
 
+任务记录会返回脱敏后的链接、提取码和状态字段。当前页面会展示这些状态：
+
+```text
+queued          排队中
+transferring    转存中
+downloading     下载中
+completed       已完成
+failed          失败
+transfer_failed 转存失败
+canceled        已取消
+expired         已过期
+```
+
 默认目录可通过环境变量覆盖：
 
 ```bash

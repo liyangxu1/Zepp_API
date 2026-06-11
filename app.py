@@ -80,6 +80,48 @@ BAIDU_SHARE_CODE_RE = re.compile(
     r"(?:提取码|提取碼|访问码|訪問碼|验证码|密[码碼]|pwd|code)[\s:：=为是-]*([A-Za-z0-9]{4})",
     re.IGNORECASE,
 )
+BAIDU_SHARE_STATUS_META = {
+    "queued": {
+        "label": "排队中",
+        "detail": "任务已提交，等待服务器开始转存和下载。",
+        "level": "info",
+    },
+    "transferring": {
+        "label": "转存中",
+        "detail": "正在把分享文件保存到服务器登录的百度网盘账号。",
+        "level": "running",
+    },
+    "transfer_failed": {
+        "label": "转存失败",
+        "detail": "分享链接转存到网盘失败，需要检查链接、提取码或网盘账号状态。",
+        "level": "failed",
+    },
+    "downloading": {
+        "label": "下载中",
+        "detail": "文件已转存，正在从百度网盘下载到服务器。",
+        "level": "running",
+    },
+    "completed": {
+        "label": "已完成",
+        "detail": "服务器已下载完成，后续可在页面提供本地下载入口。",
+        "level": "success",
+    },
+    "failed": {
+        "label": "失败",
+        "detail": "任务执行失败，需要查看后台错误信息后重试。",
+        "level": "failed",
+    },
+    "canceled": {
+        "label": "已取消",
+        "detail": "任务已取消，不会继续转存或下载。",
+        "level": "warning",
+    },
+    "expired": {
+        "label": "已过期",
+        "detail": "任务或服务器文件已过期清理。",
+        "level": "warning",
+    },
+}
 ADMIN_PASSWORD = os.environ.get("ZEPP_ADMIN_PASSWORD", "").strip()
 ADMIN_SESSION_COOKIE = "zepp_admin_session"
 ADMIN_SESSION_TTL_SECONDS = 8 * 60 * 60
@@ -1782,13 +1824,32 @@ def init_baidu_share_job_db() -> None:
         )
 
 
+def baidu_share_status_meta(status: str) -> dict:
+    raw_status = clean_message_text(status or "queued", 64) or "queued"
+    meta = BAIDU_SHARE_STATUS_META.get(raw_status)
+    if not meta:
+        return {
+            "status": raw_status,
+            "status_label": raw_status,
+            "status_detail": "任务状态由后台执行器更新。",
+            "status_level": "info",
+        }
+    return {
+        "status": raw_status,
+        "status_label": meta["label"],
+        "status_detail": meta["detail"],
+        "status_level": meta["level"],
+    }
+
+
 def public_baidu_share_job(row: dict) -> dict:
+    status_meta = baidu_share_status_meta(str(row.get("status") or "queued"))
     return {
         "id": row.get("id"),
         "job_id": row.get("job_id"),
         "created_at": row.get("created_at"),
         "updated_at": row.get("updated_at"),
-        "status": row.get("status"),
+        **status_meta,
         "share_url_masked": row.get("share_url_masked"),
         "extraction_code_masked": row.get("extraction_code_masked"),
         "netdisk_save_path": row.get("netdisk_save_path"),
@@ -2895,6 +2956,19 @@ def _simple_page_html() -> str:
       overflow-wrap: anywhere;
     }
 
+    .job-item-state {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .job-item-state strong {
+      color: var(--text);
+    }
+
     .job-item-path {
       color: var(--muted);
       font-size: 12px;
@@ -3298,6 +3372,9 @@ def _simple_page_html() -> str:
 
     .status-pill.success { color: var(--success); background: #dcfce7; }
     .status-pill.failed { color: var(--danger); background: #ffedd5; }
+    .status-pill.info { color: #0369a1; background: #e0f2fe; }
+    .status-pill.running { color: #7c3aed; background: #ede9fe; }
+    .status-pill.warning { color: #92400e; background: #fef3c7; }
 
     .support-grid {
       display: grid;
@@ -4199,7 +4276,7 @@ def _simple_page_html() -> str:
         '百度网盘中转下载',
         '- 粘贴整段分享内容即可自动解析链接和提取码',
         '- 记录网盘保存根目录与服务器下载根目录',
-        '- 任务状态先进入 queued，等待后端 worker 执行',
+        '- 任务状态先显示“排队中”，后续 worker 会更新为“转存中 / 下载中 / 已完成 / 失败”等状态',
       ].join('\\n')
       baiduSharePanel.scrollIntoView({ behavior: 'smooth', block: 'start' })
     }
@@ -4274,9 +4351,10 @@ def _simple_page_html() -> str:
         <article class="job-item">
           <div class="job-item-head">
             <span>${escapeHtml(job.created_at)} · ${escapeHtml(job.job_id)}</span>
-            <span class="status-pill ${job.status === 'queued' ? 'success' : 'failed'}">${escapeHtml(job.status)}</span>
+            <span class="status-pill ${escapeHtml(job.status_level || 'info')}" title="原始状态：${escapeHtml(job.status || '-')}">${escapeHtml(job.status_label || job.status || '排队中')}</span>
           </div>
           <div class="job-item-main">${escapeHtml(job.share_url_masked || '-')} · 提取码 ${escapeHtml(job.extraction_code_masked || '****')}</div>
+          <div class="job-item-state">当前状态：<strong>${escapeHtml(job.status_label || job.status || '排队中')}</strong><span>${escapeHtml(job.status_detail || '等待后台更新任务状态。')}</span></div>
           <div class="job-item-path">网盘：${escapeHtml(job.netdisk_save_path || '-')}</div>
           <div class="job-item-path">服务器：${escapeHtml(job.server_save_path || '-')}</div>
         </article>
@@ -4801,8 +4879,8 @@ def _simple_page_html() -> str:
         resultStatus.className = 'result-status status-success'
         resultStatus.textContent = '任务已记录'
         resultTip.className = 'tip-box show success'
-        resultTip.innerHTML = '<strong>任务已进入队列</strong><span>当前只记录任务，不触发真实转存和下载；接入 worker 后会自动执行。</span>'
-        setBaiduStatus(`任务已记录：${data.job?.job_id || ''}`, 'success')
+        resultTip.innerHTML = '<strong>任务已进入队列</strong><span>当前状态为“排队中”；接入 worker 后会继续更新为“转存中 / 下载中 / 已完成 / 失败”。</span>'
+        setBaiduStatus(`任务已记录：${data.job?.job_id || ''}，当前状态：${data.job?.status_label || '排队中'}`, 'success')
         if (data.job) {
           baiduPathPreview.innerHTML = `
             <code>网盘任务目录：${escapeHtml(data.job.netdisk_save_path || '-')}</code>
