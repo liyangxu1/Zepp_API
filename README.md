@@ -84,7 +84,48 @@ ZEPP_TOOL_API_KEY="your-key" python app.py --serve --host 0.0.0.0 --port 8000
 
 旧接口 `POST /api/step` 仍保留，用于兼容已有表单或脚本。
 
-### 5) HTTP / HTTPS
+### 5) 百度网盘中转任务记录
+
+页面已接入“百度网盘中转下载”入口。当前版本只做分享文本解析和任务落库，不会直接触发真实转存或下载；后续 worker 可按记录调用 BaiduPCS-Go。
+
+自动解析接口：
+
+```text
+POST /api/tools/baidu-share/parse
+```
+
+任务记录接口：
+
+```text
+POST /api/tools/baidu-share
+Content-Type: application/json
+```
+
+请求体：
+
+```json
+{
+  "raw_text": "链接：https://pan.baidu.com/s/1xxxx 提取码：abcd",
+  "netdisk_save_root": "/apps/server-transfer",
+  "server_download_root": "/srv/baidu-downloads",
+  "api_key": "zepp-tool-default-key"
+}
+```
+
+最近记录接口：
+
+```text
+GET /api/tools/baidu-share/jobs?limit=20
+```
+
+默认目录可通过环境变量覆盖：
+
+```bash
+BAIDU_NETDISK_DEFAULT_SAVE_ROOT="/apps/server-transfer"
+BAIDU_SERVER_DOWNLOAD_DEFAULT_ROOT="/srv/baidu-downloads"
+```
+
+### 6) HTTP / HTTPS
 
 默认启动 HTTP：
 

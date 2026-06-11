@@ -18,6 +18,7 @@ import hmac
 import json
 import mimetypes
 import os
+import posixpath
 import random
 import re
 import secrets
@@ -65,6 +66,20 @@ SHARED_DEVICE_SELF_BLOCKED_ACCOUNT_HASHES = {
     "418fc91ec857946d7179666f051d3553c035ceea3da1efcd74960cdb4aa71c86",
 }
 TOOL_API_KEY = os.environ.get("ZEPP_TOOL_API_KEY", "zepp-tool-default-key")
+BAIDU_NETDISK_DEFAULT_SAVE_ROOT = os.environ.get("BAIDU_NETDISK_DEFAULT_SAVE_ROOT", "/apps/server-transfer").strip() or "/apps/server-transfer"
+BAIDU_SERVER_DOWNLOAD_DEFAULT_ROOT = os.environ.get(
+    "BAIDU_SERVER_DOWNLOAD_DEFAULT_ROOT",
+    str(Path(__file__).with_name("baidu_share_downloads")),
+).strip() or str(Path(__file__).with_name("baidu_share_downloads"))
+BAIDU_SHARE_RAW_TEXT_MAX_LENGTH = 5000
+BAIDU_SHARE_URL_RE = re.compile(
+    r"(https?://pan\.baidu\.com/[^\s\"'<>]+|pan\.baidu\.com/[^\s\"'<>]+)",
+    re.IGNORECASE,
+)
+BAIDU_SHARE_CODE_RE = re.compile(
+    r"(?:提取码|提取碼|访问码|訪問碼|验证码|密[码碼]|pwd|code)[\s:：=为是-]*([A-Za-z0-9]{4})",
+    re.IGNORECASE,
+)
 ADMIN_PASSWORD = os.environ.get("ZEPP_ADMIN_PASSWORD", "").strip()
 ADMIN_SESSION_COOKIE = "zepp_admin_session"
 ADMIN_SESSION_TTL_SECONDS = 8 * 60 * 60
@@ -1613,6 +1628,259 @@ def clean_message_text(value: str, max_len: int = 500) -> str:
     return text.strip()[:max_len]
 
 
+def _strip_baidu_share_url_token(value: str) -> str:
+    return (value or "").strip().strip(" \t\r\n\"'<>，。；;、,.)）]】")
+
+
+def normalize_baidu_share_url(value: str) -> str:
+    raw = _strip_baidu_share_url_token(value)
+    if not raw:
+        return ""
+    if raw.startswith("//"):
+        raw = f"https:{raw}"
+    elif not re.match(r"^https?://", raw, flags=re.IGNORECASE):
+        raw = f"https://{raw}"
+
+    parsed = urllib.parse.urlparse(raw)
+    if parsed.netloc.lower() != "pan.baidu.com":
+        return ""
+    if not (parsed.path.startswith("/s/") or parsed.path.startswith("/share/init")):
+        return ""
+
+    query = urllib.parse.parse_qs(parsed.query)
+    normalized_query = urllib.parse.urlencode({k: v[-1] for k, v in query.items() if v})
+    normalized = parsed._replace(
+        scheme="https",
+        netloc="pan.baidu.com",
+        path=parsed.path.rstrip("/") or parsed.path,
+        params="",
+        query=normalized_query,
+        fragment="",
+    )
+    return urllib.parse.urlunparse(normalized)
+
+
+def extract_baidu_share_payload(raw_text: str) -> dict:
+    text = clean_message_text(raw_text, BAIDU_SHARE_RAW_TEXT_MAX_LENGTH)
+    if not text:
+        return {
+            "ok": False,
+            "error": "请粘贴百度网盘分享文本",
+            "need_resubmit": True,
+        }
+
+    share_url = ""
+    for match in BAIDU_SHARE_URL_RE.finditer(text):
+        share_url = normalize_baidu_share_url(match.group(1))
+        if share_url:
+            break
+
+    if not share_url:
+        return {
+            "ok": False,
+            "error": "没有解析到有效的百度网盘分享链接，请重新提交。",
+            "need_resubmit": True,
+        }
+
+    parsed = urllib.parse.urlparse(share_url)
+    query = urllib.parse.parse_qs(parsed.query)
+    extraction_code = (query.get("pwd", [""])[-1] or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9]{4}", extraction_code):
+        code_match = BAIDU_SHARE_CODE_RE.search(text)
+        extraction_code = code_match.group(1).strip() if code_match else ""
+
+    if not re.fullmatch(r"[A-Za-z0-9]{4}", extraction_code):
+        return {
+            "ok": False,
+            "error": "已经解析到分享链接，但没有解析到 4 位提取码，请重新提交。",
+            "need_resubmit": True,
+            "share_url": share_url,
+        }
+
+    return {
+        "ok": True,
+        "share_url": share_url,
+        "extraction_code": extraction_code,
+        "raw_text": text,
+    }
+
+
+def normalize_netdisk_root(value: str) -> str:
+    raw = clean_message_text(value or BAIDU_NETDISK_DEFAULT_SAVE_ROOT, 180).replace("\\", "/")
+    raw = re.sub(r"/+", "/", raw).strip()
+    if not raw.startswith("/"):
+        raw = f"/{raw}"
+    return posixpath.normpath(raw) if raw != "/" else "/"
+
+
+def normalize_server_download_root(value: str) -> str:
+    raw = clean_message_text(value or BAIDU_SERVER_DOWNLOAD_DEFAULT_ROOT, 240)
+    if not raw:
+        raw = BAIDU_SERVER_DOWNLOAD_DEFAULT_ROOT
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        path = Path(__file__).parent.joinpath(path)
+    return str(path.resolve(strict=False))
+
+
+def baidu_share_job_paths(job_id: str, netdisk_root: str, server_root: str) -> Tuple[str, str]:
+    safe_job_id = re.sub(r"[^A-Za-z0-9_-]+", "", job_id) or secrets.token_hex(8)
+    netdisk_path = posixpath.normpath(posixpath.join(normalize_netdisk_root(netdisk_root), safe_job_id))
+    server_path = str(Path(normalize_server_download_root(server_root)).joinpath(safe_job_id).resolve(strict=False))
+    return netdisk_path, server_path
+
+
+def mask_baidu_share_url(value: str) -> str:
+    url = value or ""
+    parsed = urllib.parse.urlparse(url)
+    if not parsed.netloc:
+        return ""
+    basename = posixpath.basename(parsed.path)
+    if len(basename) > 8:
+        masked_path = posixpath.join(posixpath.dirname(parsed.path), f"{basename[:5]}***{basename[-3:]}")
+    else:
+        masked_path = parsed.path
+    masked = parsed._replace(path=masked_path, query="", fragment="")
+    return urllib.parse.urlunparse(masked)
+
+
+def mask_baidu_extract_code(value: str) -> str:
+    text = value or ""
+    if len(text) != 4:
+        return "****"
+    return f"{text[0]}**{text[-1]}"
+
+
+def init_baidu_share_job_db() -> None:
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS baidu_share_jobs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                status TEXT NOT NULL,
+                raw_text TEXT NOT NULL,
+                share_url TEXT NOT NULL,
+                share_url_masked TEXT NOT NULL,
+                extraction_code TEXT NOT NULL,
+                extraction_code_masked TEXT NOT NULL,
+                netdisk_save_path TEXT NOT NULL,
+                server_save_path TEXT NOT NULL,
+                remote_addr TEXT,
+                user_agent TEXT,
+                response_json TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_baidu_share_jobs_created_at ON baidu_share_jobs(created_at DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_baidu_share_jobs_status ON baidu_share_jobs(status)"
+        )
+
+
+def public_baidu_share_job(row: dict) -> dict:
+    return {
+        "id": row.get("id"),
+        "job_id": row.get("job_id"),
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+        "status": row.get("status"),
+        "share_url_masked": row.get("share_url_masked"),
+        "extraction_code_masked": row.get("extraction_code_masked"),
+        "netdisk_save_path": row.get("netdisk_save_path"),
+        "server_save_path": row.get("server_save_path"),
+        "remote_addr": row.get("remote_addr") or "",
+    }
+
+
+def record_baidu_share_job(
+    *,
+    raw_text: str,
+    share_url: str,
+    extraction_code: str,
+    netdisk_root: str,
+    server_root: str,
+    remote_addr: str,
+    user_agent: str,
+) -> dict:
+    init_baidu_share_job_db()
+    job_id = f"bdpan_{datetime.now().strftime('%Y%m%d%H%M%S')}_{secrets.token_hex(4)}"
+    netdisk_save_path, server_save_path = baidu_share_job_paths(job_id, netdisk_root, server_root)
+    created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    payload = {
+        "stage": "recorded",
+        "message": "任务已记录，等待后续接入 BaiduPCS-Go worker 执行转存和下载。",
+    }
+    row = {
+        "job_id": job_id,
+        "created_at": created_at,
+        "updated_at": created_at,
+        "status": "queued",
+        "raw_text": clean_message_text(raw_text, BAIDU_SHARE_RAW_TEXT_MAX_LENGTH),
+        "share_url": share_url,
+        "share_url_masked": mask_baidu_share_url(share_url),
+        "extraction_code": extraction_code,
+        "extraction_code_masked": mask_baidu_extract_code(extraction_code),
+        "netdisk_save_path": netdisk_save_path,
+        "server_save_path": server_save_path,
+        "remote_addr": remote_addr,
+        "user_agent": clean_message_text(user_agent, 300),
+        "response_json": json.dumps(payload, ensure_ascii=False),
+    }
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO baidu_share_jobs (
+                job_id, created_at, updated_at, status, raw_text, share_url,
+                share_url_masked, extraction_code, extraction_code_masked,
+                netdisk_save_path, server_save_path, remote_addr, user_agent,
+                response_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                row["job_id"],
+                row["created_at"],
+                row["updated_at"],
+                row["status"],
+                row["raw_text"],
+                row["share_url"],
+                row["share_url_masked"],
+                row["extraction_code"],
+                row["extraction_code_masked"],
+                row["netdisk_save_path"],
+                row["server_save_path"],
+                row["remote_addr"],
+                row["user_agent"],
+                row["response_json"],
+            ),
+        )
+        row["id"] = cursor.lastrowid
+    return row
+
+
+def list_baidu_share_jobs(limit: int = 20) -> list:
+    init_baidu_share_job_db()
+    safe_limit = max(1, min(int(limit or 20), 50))
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT id, job_id, created_at, updated_at, status, share_url_masked,
+                   extraction_code_masked, netdisk_save_path, server_save_path,
+                   remote_addr
+            FROM baidu_share_jobs
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (safe_limit,),
+        ).fetchall()
+    return [public_baidu_share_job(dict(row)) for row in rows]
+
+
 def current_token_date() -> str:
     return datetime.now().strftime("%Y-%m-%d")
 
@@ -2563,6 +2831,77 @@ def _simple_page_html() -> str:
       color: var(--text);
     }
 
+    .baidu-share-workspace {
+      scroll-margin-top: 78px;
+    }
+
+    .baidu-share-form textarea {
+      min-height: 132px;
+      resize: vertical;
+    }
+
+    .path-preview {
+      display: grid;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .path-preview code {
+      display: block;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #f8fafc;
+      padding: 8px 10px;
+      color: #334155;
+      overflow-wrap: anywhere;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .job-list {
+      display: grid;
+      gap: 10px;
+      margin-top: 14px;
+    }
+
+    .job-list-title {
+      margin-top: 16px;
+      color: var(--text);
+      font-size: 14px;
+      font-weight: 900;
+    }
+
+    .job-item {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 10px 12px;
+      display: grid;
+      gap: 6px;
+    }
+
+    .job-item-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .job-item-main {
+      color: var(--text);
+      font-weight: 800;
+      overflow-wrap: anywhere;
+    }
+
+    .job-item-path {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
+
     .shared-step-card {
       display: grid;
       gap: 8px;
@@ -3213,8 +3552,9 @@ def _simple_page_html() -> str:
         </div>
       </div>
       <div class="side-section-title">工具分类</div>
-      <button class="category active" data-category="all"><span>全部工具</span><span class="category-count">8</span></button>
+      <button class="category active" data-category="all"><span>全部工具</span><span class="category-count">9</span></button>
       <button class="category" data-category="life"><span>生活工具</span><span class="category-count">1</span></button>
+      <button class="category" data-category="file"><span>文件工具</span><span class="category-count">1</span></button>
       <button class="category" data-category="promotion"><span>推广工具</span><span class="category-count">1</span></button>
       <button class="category" data-category="dev"><span>开发工具</span><span class="category-count">3</span></button>
       <button class="category" data-category="text"><span>文本工具</span><span class="category-count">1</span></button>
@@ -3222,6 +3562,7 @@ def _simple_page_html() -> str:
       <button class="category" data-category="office"><span>办公工具</span><span class="category-count">1</span></button>
       <div class="side-section-title">当前工具</div>
       <button class="category active" data-tool-shortcut="zepp-step"><span>微信步数修改</span><span class="category-count">可用</span></button>
+      <button class="category" data-tool-shortcut="baidu-share"><span>网盘中转下载</span><span class="category-count">记录中</span></button>
     </aside>
 
     <main class="main">
@@ -3241,7 +3582,7 @@ def _simple_page_html() -> str:
             <p class="section-desc">先把已跑通的微信步数修改放进工具站框架，也支持跳转到独立工具页面和人工对接服务。</p>
           </div>
           <div class="stats">
-            <div class="stat"><strong>2</strong><span>自助工具</span></div>
+            <div class="stat"><strong>3</strong><span>自助工具</span></div>
             <div class="stat"><strong>1</strong><span>人工对接</span></div>
             <div class="stat"><strong>5</strong><span>预留位置</span></div>
           </div>
@@ -3457,6 +3798,48 @@ def _simple_page_html() -> str:
           </div>
         </section>
 
+        <section class="workspace baidu-share-workspace" id="baiduSharePanel">
+          <div class="panel">
+            <h2>百度网盘中转下载</h2>
+            <p>先记录分享链接任务：用户可直接粘贴整段分享文本，系统自动解析链接和提取码，并记录网盘保存目录与服务器下载目录。</p>
+            <div class="tool-notice">当前版本只负责解析和落库，不会立刻触发真实转存或下载；接入 BaiduPCS-Go worker 后会按任务记录执行。</div>
+            <form class="baidu-share-form" id="baiduShareForm">
+              <div class="form-row">
+                <label>分享文本</label>
+                <textarea name="raw_text" id="baiduRawText" required maxlength="5000" placeholder="直接粘贴百度网盘分享内容，例如：链接：https://pan.baidu.com/s/1xxxx 提取码：abcd"></textarea>
+                <div class="field-hint">支持从整段文字里自动提取 pan.baidu.com 链接和 4 位提取码；如果没解析到，会提示重新提交。</div>
+              </div>
+              <div class="form-row">
+                <label>网盘保存根目录</label>
+                <input name="netdisk_save_root" id="baiduNetdiskRoot" type="text" placeholder="/apps/server-transfer" />
+                <div class="field-hint">实际任务会在该根目录下按 job_id 建一个独立目录，避免多个任务互相覆盖。</div>
+              </div>
+              <div class="form-row">
+                <label>服务器下载根目录</label>
+                <input name="server_download_root" id="baiduServerRoot" type="text" placeholder="服务器本地下载目录" />
+                <div class="field-hint">后续 worker 会把网盘文件下载到该根目录下的 job_id 子目录，再由网页提供下载。</div>
+              </div>
+              <div class="actions">
+                <button class="primary" type="submit" id="baiduSubmit">提交任务</button>
+                <button class="ghost" type="button" id="baiduParseBtn">重新解析</button>
+                <button class="ghost" type="button" id="refreshBaiduJobs">刷新记录</button>
+              </div>
+              <div class="share-status" id="baiduShareStatus">等待粘贴分享文本。</div>
+            </form>
+          </div>
+
+          <div class="panel">
+            <h2>解析结果</h2>
+            <p>这里只展示解析预览和最近任务记录；完整分享链接与提取码只保存在服务器 SQLite 里供后续 worker 使用。</p>
+            <div class="share-meta" id="baiduParsePreview">尚未解析。</div>
+            <div class="path-preview" id="baiduPathPreview"></div>
+            <div class="job-list-title">提交记录（脱敏）</div>
+            <div class="job-list" id="baiduJobsList">
+              <div class="empty-card">暂无百度网盘任务。</div>
+            </div>
+          </div>
+        </section>
+
         <section class="support-grid">
           <div class="panel">
             <h2>留言反馈</h2>
@@ -3466,6 +3849,7 @@ def _simple_page_html() -> str:
                 <label>相关工具</label>
                 <select name="tool_id">
                   <option value="zepp-step">微信步数修改</option>
+                  <option value="baidu-share">百度网盘中转下载</option>
                   <option value="douyin-growth">抖音点赞涨粉</option>
                   <option value="other">其他工具 / 新功能建议</option>
                 </select>
@@ -3530,6 +3914,15 @@ def _simple_page_html() -> str:
         title: '微信步数修改',
         badge: '可用',
         desc: '有设备走 Zepp Life 提交；无设备走扫码绑定处理。',
+        active: true,
+      },
+      {
+        id: 'baidu-share',
+        category: 'file',
+        title: '百度网盘中转下载',
+        badge: '记录中',
+        purpose: '分享链接解析、保存路径记录、等待下载队列',
+        desc: '粘贴整段百度网盘分享文本，自动提取链接和提取码，记录后续转存与服务器下载路径。',
         active: true,
       },
       {
@@ -3624,10 +4017,24 @@ def _simple_page_html() -> str:
     const sharedStepStatus = document.getElementById('sharedStepStatus')
     const sharedCurrentStep = document.getElementById('sharedCurrentStep')
     const sharedNextStepHint = document.getElementById('sharedNextStepHint')
+    const baiduSharePanel = document.getElementById('baiduSharePanel')
+    const baiduShareForm = document.getElementById('baiduShareForm')
+    const baiduRawText = document.getElementById('baiduRawText')
+    const baiduNetdiskRoot = document.getElementById('baiduNetdiskRoot')
+    const baiduServerRoot = document.getElementById('baiduServerRoot')
+    const baiduSubmit = document.getElementById('baiduSubmit')
+    const baiduParseBtn = document.getElementById('baiduParseBtn')
+    const refreshBaiduJobs = document.getElementById('refreshBaiduJobs')
+    const baiduShareStatus = document.getElementById('baiduShareStatus')
+    const baiduParsePreview = document.getElementById('baiduParsePreview')
+    const baiduPathPreview = document.getElementById('baiduPathPreview')
+    const baiduJobsList = document.getElementById('baiduJobsList')
     const stepMax = 98800
     const toolApiKey = __ZEPP_TOOL_API_KEY__
     const qqGroupName = __QQ_GROUP_NAME_JSON__
     const qqGroupNumber = __QQ_GROUP_NUMBER_JSON__
+    const baiduNetdiskDefaultRoot = __BAIDU_NETDISK_DEFAULT_SAVE_ROOT_JSON__
+    const baiduServerDefaultRoot = __BAIDU_SERVER_DOWNLOAD_DEFAULT_ROOT_JSON__
     const sharedSelfBlockedAccounts = new Set(['3313696759@proton.me'])
     let currentCategory = 'all'
     let qrConfigured = false
@@ -3637,6 +4044,7 @@ def _simple_page_html() -> str:
     let sharedCurrentStepValue = null
     let sharedCanSync = false
     let qrConfirmTimer = null
+    let baiduParseTimer = null
 
     function escapeHtml(value) {
       return String(value ?? '')
@@ -3782,6 +4190,109 @@ def _simple_page_html() -> str:
       document.getElementById('toolPanel').scrollIntoView({ behavior: 'smooth', block: 'start' })
     }
 
+    function showBaiduSharePanel() {
+      resultStatus.className = 'result-status status-idle'
+      resultStatus.textContent = '网盘任务记录'
+      resultTip.className = 'tip-box show success'
+      resultTip.innerHTML = '<strong>百度网盘中转下载</strong><span>当前先做分享文本解析和任务落库，真实转存/下载由后续 BaiduPCS-Go worker 接入。</span>'
+      result.textContent = [
+        '百度网盘中转下载',
+        '- 粘贴整段分享内容即可自动解析链接和提取码',
+        '- 记录网盘保存根目录与服务器下载根目录',
+        '- 任务状态先进入 queued，等待后端 worker 执行',
+      ].join('\\n')
+      baiduSharePanel.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }
+
+    function setBaiduStatus(message, state = '') {
+      baiduShareStatus.className = `share-status ${state}`.trim()
+      baiduShareStatus.textContent = message
+    }
+
+    function renderBaiduParsePreview(data) {
+      const parsed = data?.parsed
+      if (!parsed) {
+        delete baiduParsePreview.dataset.parsed
+        baiduParsePreview.textContent = '尚未解析。'
+        baiduPathPreview.innerHTML = ''
+        return
+      }
+      baiduParsePreview.dataset.parsed = JSON.stringify(data)
+      baiduParsePreview.innerHTML = `
+        <strong>已解析到分享信息</strong><br />
+        链接：${escapeHtml(parsed.share_url_masked || parsed.share_url)}<br />
+        提取码：${escapeHtml(parsed.extraction_code_masked || '****')}
+      `
+      baiduPathPreview.innerHTML = `
+        <code>网盘保存根目录：${escapeHtml(baiduNetdiskRoot.value || baiduNetdiskDefaultRoot)}</code>
+        <code>服务器下载根目录：${escapeHtml(baiduServerRoot.value || baiduServerDefaultRoot)}</code>
+      `
+    }
+
+    async function parseBaiduShareText(showEmpty = false) {
+      const rawText = baiduRawText.value.trim()
+      if (!rawText) {
+        if (showEmpty) setBaiduStatus('请先粘贴百度网盘分享文本。', 'failed')
+        renderBaiduParsePreview(null)
+        return null
+      }
+      try {
+        const resp = await fetch('/api/tools/baidu-share/parse', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ raw_text: rawText })
+        })
+        const data = await resp.json()
+        if (!resp.ok || data.status !== 'success') {
+          renderBaiduParsePreview(null)
+          setBaiduStatus(data.error || '没有解析到有效分享信息，请重新提交。', 'failed')
+          return null
+        }
+        renderBaiduParsePreview(data)
+        setBaiduStatus('已自动解析到百度网盘链接和提取码，可以提交任务。', 'success')
+        return data
+      } catch (err) {
+        setBaiduStatus(`解析失败：${err}`, 'failed')
+        return null
+      }
+    }
+
+    function scheduleBaiduParse() {
+      window.clearTimeout(baiduParseTimer)
+      baiduParseTimer = window.setTimeout(() => {
+        if (baiduRawText.value.trim().length >= 12) {
+          parseBaiduShareText(false)
+        } else {
+          renderBaiduParsePreview(null)
+          setBaiduStatus('等待粘贴分享文本。')
+        }
+      }, 420)
+    }
+
+    function renderBaiduJobs(jobs) {
+      baiduJobsList.innerHTML = jobs.length ? jobs.map((job) => `
+        <article class="job-item">
+          <div class="job-item-head">
+            <span>${escapeHtml(job.created_at)} · ${escapeHtml(job.job_id)}</span>
+            <span class="status-pill ${job.status === 'queued' ? 'success' : 'failed'}">${escapeHtml(job.status)}</span>
+          </div>
+          <div class="job-item-main">${escapeHtml(job.share_url_masked || '-')} · 提取码 ${escapeHtml(job.extraction_code_masked || '****')}</div>
+          <div class="job-item-path">网盘：${escapeHtml(job.netdisk_save_path || '-')}</div>
+          <div class="job-item-path">服务器：${escapeHtml(job.server_save_path || '-')}</div>
+        </article>
+      `).join('') : '<div class="empty-card">暂无百度网盘任务。</div>'
+    }
+
+    async function loadBaiduJobs() {
+      try {
+        const resp = await fetch('/api/tools/baidu-share/jobs?limit=12')
+        const data = await resp.json()
+        renderBaiduJobs(data.jobs || [])
+      } catch (err) {
+        baiduJobsList.innerHTML = `<div class="empty-card">任务记录加载失败：${escapeHtml(err)}</div>`
+      }
+    }
+
     function renderTools() {
       const keyword = searchInput.value.trim().toLowerCase()
       const visible = tools.filter((tool) => {
@@ -3812,6 +4323,10 @@ def _simple_page_html() -> str:
             window.location.href = tool.url
             return
           }
+          if (toolId === 'baidu-share') {
+            showBaiduSharePanel()
+            return
+          }
           if (toolId === 'douyin-growth') {
             showDouyinGrowthIntro()
             return
@@ -3838,6 +4353,11 @@ def _simple_page_html() -> str:
 
     document.querySelectorAll('[data-tool-shortcut]').forEach((button) => {
       button.addEventListener('click', () => {
+        const toolId = button.getAttribute('data-tool-shortcut')
+        if (toolId === 'baidu-share') {
+          showBaiduSharePanel()
+          return
+        }
         document.getElementById('toolPanel').scrollIntoView({ behavior: 'smooth', block: 'start' })
       })
     })
@@ -4242,6 +4762,65 @@ def _simple_page_html() -> str:
 
     refreshMessages.addEventListener('click', loadMessages)
 
+    baiduNetdiskRoot.value = baiduNetdiskDefaultRoot
+    baiduServerRoot.value = baiduServerDefaultRoot
+    baiduRawText.addEventListener('input', scheduleBaiduParse)
+    baiduRawText.addEventListener('paste', () => window.setTimeout(scheduleBaiduParse, 0))
+    baiduNetdiskRoot.addEventListener('input', () => renderBaiduParsePreview(baiduParsePreview.dataset.parsed ? JSON.parse(baiduParsePreview.dataset.parsed) : null))
+    baiduServerRoot.addEventListener('input', () => renderBaiduParsePreview(baiduParsePreview.dataset.parsed ? JSON.parse(baiduParsePreview.dataset.parsed) : null))
+    baiduParseBtn.addEventListener('click', () => parseBaiduShareText(true))
+    refreshBaiduJobs.addEventListener('click', loadBaiduJobs)
+
+    baiduShareForm.addEventListener('submit', async (e) => {
+      e.preventDefault()
+      const parsed = await parseBaiduShareText(true)
+      if (!parsed) return
+      baiduSubmit.disabled = true
+      setBaiduStatus('正在记录百度网盘任务...', '')
+      resultStatus.className = 'result-status status-idle'
+      resultStatus.textContent = '记录中'
+      resultTip.className = 'tip-box'
+      resultTip.innerHTML = ''
+      result.textContent = '正在请求 /api/tools/baidu-share ...'
+      try {
+        const resp = await fetch('/api/tools/baidu-share', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            raw_text: baiduRawText.value.trim(),
+            netdisk_save_root: baiduNetdiskRoot.value.trim(),
+            server_download_root: baiduServerRoot.value.trim(),
+            api_key: toolApiKey,
+          })
+        })
+        const data = await resp.json()
+        result.textContent = JSON.stringify(data, null, 2)
+        if (!resp.ok || data.status !== 'success') {
+          throw new Error(data.error || '任务记录失败')
+        }
+        resultStatus.className = 'result-status status-success'
+        resultStatus.textContent = '任务已记录'
+        resultTip.className = 'tip-box show success'
+        resultTip.innerHTML = '<strong>任务已进入队列</strong><span>当前只记录任务，不触发真实转存和下载；接入 worker 后会自动执行。</span>'
+        setBaiduStatus(`任务已记录：${data.job?.job_id || ''}`, 'success')
+        if (data.job) {
+          baiduPathPreview.innerHTML = `
+            <code>网盘任务目录：${escapeHtml(data.job.netdisk_save_path || '-')}</code>
+            <code>服务器任务目录：${escapeHtml(data.job.server_save_path || '-')}</code>
+          `
+        }
+        loadBaiduJobs()
+      } catch (err) {
+        resultStatus.className = 'result-status status-failed'
+        resultStatus.textContent = '记录失败'
+        resultTip.className = 'tip-box show failed'
+        resultTip.innerHTML = `<strong>任务记录失败</strong><span>${escapeHtml(err)}</span>`
+        setBaiduStatus(`任务记录失败：${err}`, 'failed')
+      } finally {
+        baiduSubmit.disabled = false
+      }
+    })
+
     copyGroupNumber.addEventListener('click', async () => {
       const groupNumber = document.getElementById('groupNumber').textContent.trim()
       try {
@@ -4373,6 +4952,7 @@ def _simple_page_html() -> str:
     loadDeviceQrStatus()
     loadLogs()
     loadMessages()
+    loadBaiduJobs()
   </script>
 </body>
 </html>
@@ -4380,6 +4960,10 @@ def _simple_page_html() -> str:
     "__QQ_GROUP_NAME_JSON__", json.dumps(QQ_GROUP_NAME)
 ).replace(
     "__QQ_GROUP_NUMBER_JSON__", json.dumps(QQ_GROUP_NUMBER)
+).replace(
+    "__BAIDU_NETDISK_DEFAULT_SAVE_ROOT_JSON__", json.dumps(normalize_netdisk_root(""))
+).replace(
+    "__BAIDU_SERVER_DOWNLOAD_DEFAULT_ROOT_JSON__", json.dumps(normalize_server_download_root(""))
 ).replace(
     "__QQ_GROUP_NAME__", QQ_GROUP_NAME
 ).replace(
@@ -5241,6 +5825,87 @@ def _run_http_server(
         def _debug_enabled(params: Dict[str, str]) -> bool:
             return params.get("debug", "").strip().lower() in ("1", "true", "yes", "on")
 
+        def _parse_baidu_share_text(self, params: Dict[str, str]) -> None:
+            raw_text = params.get("raw_text", "") or params.get("text", "") or params.get("content", "")
+            parsed = extract_baidu_share_payload(raw_text)
+            if not parsed.get("ok"):
+                self._json_response(
+                    {
+                        "status": "failed",
+                        **parsed,
+                        "defaults": {
+                            "netdisk_save_root": normalize_netdisk_root(""),
+                            "server_download_root": normalize_server_download_root(""),
+                        },
+                    },
+                    status=400,
+                )
+                return
+
+            share_url = str(parsed.get("share_url") or "")
+            extraction_code = str(parsed.get("extraction_code") or "")
+            self._json_response(
+                {
+                    "status": "success",
+                    "parsed": {
+                        "share_url": share_url,
+                        "share_url_masked": mask_baidu_share_url(share_url),
+                        "extraction_code": extraction_code,
+                        "extraction_code_masked": mask_baidu_extract_code(extraction_code),
+                    },
+                    "defaults": {
+                        "netdisk_save_root": normalize_netdisk_root(""),
+                        "server_download_root": normalize_server_download_root(""),
+                    },
+                }
+            )
+
+        def _submit_baidu_share_job(self, params: Dict[str, str]) -> None:
+            if self.command != "POST":
+                self._json_response({"status": "failed", "error": "请使用 POST 提交百度网盘任务"}, status=405)
+                return
+
+            if not self._is_authorized(params):
+                self._json_response(
+                    {
+                        "status": "failed",
+                        "error": "未授权，必须提供有效 api_key 或 X-Api-Key",
+                    },
+                    status=401,
+                )
+                return
+
+            raw_text = params.get("raw_text", "") or params.get("text", "") or params.get("content", "")
+            parsed = extract_baidu_share_payload(raw_text)
+            if not parsed.get("ok"):
+                self._json_response({"status": "failed", **parsed}, status=400)
+                return
+
+            job = record_baidu_share_job(
+                raw_text=str(parsed.get("raw_text") or raw_text),
+                share_url=str(parsed.get("share_url") or ""),
+                extraction_code=str(parsed.get("extraction_code") or ""),
+                netdisk_root=params.get("netdisk_save_root", "") or params.get("netdisk_save_path", ""),
+                server_root=params.get("server_download_root", "") or params.get("server_save_path", ""),
+                remote_addr=self.client_address[0] if self.client_address else "",
+                user_agent=self.headers.get("User-Agent", ""),
+            )
+            public_job = public_baidu_share_job(job)
+            self._json_response(
+                {
+                    "status": "success",
+                    "message": "百度网盘分享任务已记录，后续 worker 会按该记录执行转存和下载。",
+                    "job": public_job,
+                    "parsed": {
+                        "share_url": job["share_url"],
+                        "share_url_masked": job["share_url_masked"],
+                        "extraction_code": job["extraction_code"],
+                        "extraction_code_masked": job["extraction_code_masked"],
+                    },
+                    "next_step": "下一步接入 BaiduPCS-Go worker：transfer 到 netdisk_save_path，再 download --saveto 到 server_save_path。",
+                }
+            )
+
         def _submit_zepp_step(self, params: Dict[str, str]) -> None:
             if not self._ensure_valid_verification_token(params):
                 return
@@ -5596,6 +6261,22 @@ def _run_http_server(
                 self._json_response({"status": "success", "message": item})
                 return
 
+            if path == "/api/tools/baidu-share/parse":
+                self._parse_baidu_share_text(params)
+                return
+
+            if path == "/api/tools/baidu-share/jobs":
+                try:
+                    limit = int(params.get("limit", "20"))
+                except ValueError:
+                    limit = 20
+                self._json_response({"status": "success", "jobs": list_baidu_share_jobs(limit)}, headers=no_store_headers)
+                return
+
+            if path == "/api/tools/baidu-share":
+                self._submit_baidu_share_job(params)
+                return
+
             if path == "/api/payload-preview":
                 try:
                     step = int(params.get("step", "0"))
@@ -5670,6 +6351,7 @@ def _run_http_server(
         httpd.ssl_context = context
         scheme = "http+https"
     init_tool_log_db()
+    init_baidu_share_job_db()
     init_device_binding_db()
     init_zepp_token_cache_db()
     get_or_create_daily_token()
