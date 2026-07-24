@@ -243,6 +243,8 @@ DEVICE_SHARE_UPLOAD_ENABLED = os.environ.get("DEVICE_SHARE_UPLOAD_ENABLED", "").
 )
 QQ_GROUP_NAME = "接待喵的小窝"
 QQ_GROUP_NUMBER = "1084427315"
+QQ_LIKE_GROUP_NAME = "扩列聊天交友CP群"
+QQ_LIKE_GROUP_NUMBER = "575750679"
 LEGACY_LOGIN_DEVICE_ID = "2C8B4939-0CCD-4E94-8CBA-CB8EA6E613A1"
 LEGACY_LAST_DEVICE_ID = "DA932FFFFE8816E7"
 DEVICE_BIND_QR_TOKENS: Dict[str, dict] = {}
@@ -4479,6 +4481,126 @@ def _simple_page_html() -> str:
       flex: none;
     }
 
+    .qq-like-community {
+      overflow: hidden;
+    }
+
+    .qq-like-community-head {
+      display: grid;
+      grid-template-columns: 64px minmax(0, 1fr);
+      gap: 14px;
+      align-items: center;
+    }
+
+    .qq-like-community-avatar {
+      width: 64px;
+      height: 64px;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      object-fit: cover;
+      background: #f8fafc;
+    }
+
+    .qq-like-community-copy {
+      min-width: 0;
+    }
+
+    .qq-like-community-title {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      flex-wrap: wrap;
+    }
+
+    .qq-like-community-title h2 {
+      margin: 0;
+    }
+
+    .qq-like-community-badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      border-radius: 999px;
+      padding: 3px 9px;
+      color: #0f766e;
+      background: #ecfdf5;
+      font-size: 12px;
+      font-weight: 850;
+    }
+
+    .qq-like-community-name {
+      margin-top: 7px;
+      color: var(--text);
+      font-weight: 850;
+    }
+
+    .qq-like-community-number {
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 13px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .qq-like-community-desc {
+      margin: 7px 0 0;
+      color: var(--muted);
+      line-height: 1.55;
+      font-size: 13px;
+    }
+
+    .qq-like-community-actions {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 180px));
+      gap: 10px;
+      margin-top: 14px;
+    }
+
+    .qq-like-community-actions button {
+      width: 100%;
+    }
+
+    .qq-like-community-qr-panel {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(180px, 240px);
+      gap: 18px;
+      align-items: center;
+      margin-top: 14px;
+      border-top: 1px solid var(--line);
+      padding-top: 14px;
+    }
+
+    .qq-like-community-qr-panel[hidden] {
+      display: none;
+    }
+
+    .qq-like-community-qr-copy {
+      color: var(--muted);
+      line-height: 1.65;
+    }
+
+    .qq-like-community-qr-copy strong {
+      display: block;
+      margin-bottom: 5px;
+      color: var(--text);
+    }
+
+    .qq-like-community-qr-link {
+      display: block;
+      width: min(100%, 240px);
+      justify-self: end;
+    }
+
+    .qq-like-community-qr-image {
+      display: block;
+      width: 100%;
+      max-height: 430px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      object-fit: contain;
+      background: #f8fafc;
+      box-shadow: var(--shadow-soft);
+    }
+
     .baidu-share-form textarea {
       min-height: 132px;
       resize: vertical;
@@ -5274,6 +5396,25 @@ def _simple_page_html() -> str:
       .qq-like-task-step span {
         margin-top: 1px;
       }
+      .qq-like-community-head {
+        grid-template-columns: 54px minmax(0, 1fr);
+        gap: 12px;
+      }
+      .qq-like-community-avatar {
+        width: 54px;
+        height: 54px;
+        border-radius: 17px;
+      }
+      .qq-like-community-actions {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .qq-like-community-qr-panel {
+        grid-template-columns: 1fr;
+      }
+      .qq-like-community-qr-link {
+        width: min(100%, 240px);
+        justify-self: center;
+      }
     }
   </style>
 </head>
@@ -5672,6 +5813,34 @@ def _simple_page_html() -> str:
               <div class="share-status" id="qqLikeGlobalStatus">正在检查本机是否保存了贡献凭证。</div>
             </section>
 
+            <section class="panel qq-like-community" aria-labelledby="qqLikeCommunityTitle">
+              <div class="qq-like-community-head">
+                <img class="qq-like-community-avatar" src="/assets/qq-like-group-avatar.jpg" alt="__QQ_LIKE_GROUP_NAME__群头像" />
+                <div class="qq-like-community-copy">
+                  <div class="qq-like-community-title">
+                    <h2 id="qqLikeCommunityTitle">QQ 互赞交流群</h2>
+                    <span class="qq-like-community-badge">交流与反馈</span>
+                  </div>
+                  <div class="qq-like-community-name">__QQ_LIKE_GROUP_NAME__</div>
+                  <div class="qq-like-community-number">群号：<span id="qqLikeGroupNumber">__QQ_LIKE_GROUP_NUMBER__</span></div>
+                  <p class="qq-like-community-desc">互赞使用交流、问题反馈和功能通知。</p>
+                </div>
+              </div>
+              <div class="qq-like-community-actions">
+                <button class="primary" type="button" id="qqLikeCopyGroupNumber">复制群号</button>
+                <button class="ghost" type="button" id="qqLikeToggleGroupQr" aria-expanded="false" aria-controls="qqLikeGroupQrPanel">查看二维码</button>
+              </div>
+              <div class="qq-like-community-qr-panel" id="qqLikeGroupQrPanel" hidden>
+                <div class="qq-like-community-qr-copy">
+                  <strong>扫码加入群聊</strong>
+                  手机 QQ 可直接扫一扫。当前就在手机上时，可以点开大图后长按保存，再从 QQ 相册识别二维码。
+                </div>
+                <a class="qq-like-community-qr-link" href="/assets/qq-like-group.jpg" target="_blank" rel="noreferrer" aria-label="打开__QQ_LIKE_GROUP_NAME__群二维码大图">
+                  <img class="qq-like-community-qr-image" src="/assets/qq-like-group.jpg" alt="__QQ_LIKE_GROUP_NAME__群二维码" />
+                </a>
+              </div>
+            </section>
+
             <section class="panel">
               <h2>发起今日互赞</h2>
               <p>系统会自动选择另一台当天仍有额度的贡献账号执行，同一来源账号每天只执行一次互赞任务。</p>
@@ -5992,6 +6161,9 @@ def _simple_page_html() -> str:
     const qqLikeForgetLocal = document.getElementById('qqLikeForgetLocal')
     const qqLikeRevoke = document.getElementById('qqLikeRevoke')
     const qqLikeGlobalStatus = document.getElementById('qqLikeGlobalStatus')
+    const qqLikeCopyGroupNumber = document.getElementById('qqLikeCopyGroupNumber')
+    const qqLikeToggleGroupQr = document.getElementById('qqLikeToggleGroupQr')
+    const qqLikeGroupQrPanel = document.getElementById('qqLikeGroupQrPanel')
     const qqLikeRequestForm = document.getElementById('qqLikeRequestForm')
     const qqLikeTarget = document.getElementById('qqLikeTarget')
     const qqLikeSubmit = document.getElementById('qqLikeSubmit')
@@ -6011,6 +6183,7 @@ def _simple_page_html() -> str:
     const toolApiKey = __ZEPP_TOOL_API_KEY__
     const qqGroupName = __QQ_GROUP_NAME_JSON__
     const qqGroupNumber = __QQ_GROUP_NUMBER_JSON__
+    const qqLikeGroupNumber = __QQ_LIKE_GROUP_NUMBER_JSON__
     const baiduNetdiskDefaultRoot = __BAIDU_NETDISK_DEFAULT_SAVE_ROOT_JSON__
     const baiduServerDefaultRoot = __BAIDU_SERVER_DOWNLOAD_DEFAULT_ROOT_JSON__
     const sharedSelfBlockedAccounts = new Set(['3313696759@proton.me'])
@@ -6646,6 +6819,27 @@ def _simple_page_html() -> str:
         setShareStatus(qqLikeGlobalStatus, `提交失败：${error.message}`, 'failed')
         await loadQQLikeDashboard()
       }
+    })
+
+    qqLikeCopyGroupNumber.addEventListener('click', async () => {
+      try {
+        await copyTextToClipboard(qqLikeGroupNumber)
+        qqLikeCopyGroupNumber.textContent = '已复制'
+        showCopyToast(`QQ 互赞群号 ${qqLikeGroupNumber} 已复制`)
+        window.setTimeout(() => {
+          qqLikeCopyGroupNumber.textContent = '复制群号'
+        }, 1500)
+      } catch {
+        qqLikeCopyGroupNumber.textContent = qqLikeGroupNumber
+        showCopyToast('复制失败，请手动复制群号', 'failed')
+      }
+    })
+
+    qqLikeToggleGroupQr.addEventListener('click', () => {
+      const shouldOpen = qqLikeGroupQrPanel.hidden
+      qqLikeGroupQrPanel.hidden = !shouldOpen
+      qqLikeToggleGroupQr.setAttribute('aria-expanded', shouldOpen ? 'true' : 'false')
+      qqLikeToggleGroupQr.textContent = shouldOpen ? '收起二维码' : '查看二维码'
     })
 
     reservedCopyGroupNumber?.addEventListener('click', async () => {
@@ -7548,6 +7742,8 @@ def _simple_page_html() -> str:
 ).replace(
     "__QQ_GROUP_NUMBER_JSON__", json.dumps(QQ_GROUP_NUMBER)
 ).replace(
+    "__QQ_LIKE_GROUP_NUMBER_JSON__", json.dumps(QQ_LIKE_GROUP_NUMBER)
+).replace(
     "__BAIDU_NETDISK_DEFAULT_SAVE_ROOT_JSON__", json.dumps(normalize_netdisk_root(""))
 ).replace(
     "__BAIDU_SERVER_DOWNLOAD_DEFAULT_ROOT_JSON__", json.dumps(normalize_server_download_root(""))
@@ -7557,6 +7753,10 @@ def _simple_page_html() -> str:
     "__QQ_GROUP_NAME__", QQ_GROUP_NAME
 ).replace(
     "__QQ_GROUP_NUMBER__", QQ_GROUP_NUMBER
+).replace(
+    "__QQ_LIKE_GROUP_NAME__", QQ_LIKE_GROUP_NAME
+).replace(
+    "__QQ_LIKE_GROUP_NUMBER__", QQ_LIKE_GROUP_NUMBER
 )
 
 
@@ -8772,6 +8972,8 @@ def _run_http_server(
                 "/favicon.svg": "logo.svg",
                 "/assets/qq-group.svg": "qq-group.svg",
                 "/assets/qq-group.jpg": "qq-group.jpg",
+                "/assets/qq-like-group.jpg": "qq-like-group.jpg",
+                "/assets/qq-like-group-avatar.jpg": "qq-like-group-avatar.jpg",
                 "/assets/tutorial/zepp-life-logo.jpg": "tutorial/zepp-life-logo.jpg",
                 "/assets/tutorial/zepp-logo.jpg": "tutorial/zepp-logo.jpg",
                 "/assets/tutorial/zepp-life-original.jpg": "tutorial/zepp-life-original.jpg",
