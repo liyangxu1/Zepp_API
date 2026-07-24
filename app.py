@@ -214,6 +214,18 @@ QQ_LIKE_DB_PATH = Path(
 ).expanduser()
 QQ_LIKE_WEBUI_PORT = _env_int("QQ_LIKE_WEBUI_PORT", 16199, 1024, 65535)
 QQ_LIKE_ONEBOT_PORT = _env_int("QQ_LIKE_ONEBOT_PORT", 16100, 1024, 65535)
+QQ_LIKE_MAX_CONTRIBUTORS = _env_int(
+    "QQ_LIKE_MAX_CONTRIBUTORS",
+    20,
+    1,
+    200,
+)
+QQ_LIKE_PENDING_RETENTION_HOURS = _env_int(
+    "QQ_LIKE_PENDING_RETENTION_HOURS",
+    24,
+    1,
+    24 * 30,
+)
 DEVICE_BIND_QR_ENV = os.environ.get("DEVICE_BIND_QR_PATH", "").strip()
 DEVICE_BIND_QR_TOKEN_TTL_SECONDS = 120
 DEVICE_BIND_QR_UNAVAILABLE_MESSAGE = "当前二维码有设备未解绑，暂时不能使用，请联系管理员。"
@@ -8216,6 +8228,8 @@ def _run_http_server(
         enabled=QQ_LIKE_ENABLED,
         webui_port=QQ_LIKE_WEBUI_PORT,
         onebot_port=QQ_LIKE_ONEBOT_PORT,
+        max_contributors=QQ_LIKE_MAX_CONTRIBUTORS,
+        pending_retention_hours=QQ_LIKE_PENDING_RETENTION_HOURS,
     )
     qq_like_runtime_state = {"startup_error": ""}
 
@@ -8730,6 +8744,7 @@ def _run_http_server(
                     payload = qq_like_service.recover_access(
                         params.get("contributor_id", ""),
                         params.get("recovery_code", ""),
+                        remote_addr=remote_addr,
                     )
                     self._json_response(
                         {"status": "success", **payload},

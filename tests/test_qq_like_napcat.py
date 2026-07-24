@@ -9,6 +9,8 @@ from unittest.mock import patch
 from qq_like.napcat import (
     MANAGED_LABEL_KEY,
     MANAGED_LABEL_VALUE,
+    MANAGED_NETWORK_LABEL_VALUE,
+    MANAGED_NETWORK_NAME,
     NAPCAT_IMAGE,
     DockerNapCatRuntime,
     NapCatError,
@@ -43,6 +45,8 @@ class FakeRunner:
     def __init__(self):
         self.calls = []
         self.managed_names = []
+        self.network_exists = False
+        self.network_label = MANAGED_NETWORK_LABEL_VALUE
         self.fail_run = False
 
     def run(self, args, *, timeout=60):
@@ -52,6 +56,19 @@ class FakeRunner:
             if stdout:
                 stdout += "\n"
             return subprocess.CompletedProcess(args, 0, stdout=stdout, stderr="")
+        if args[:3] == ["docker", "network", "ls"]:
+            stdout = ""
+            if self.network_exists:
+                stdout = f"{MANAGED_NETWORK_NAME}|{self.network_label}\n"
+            return subprocess.CompletedProcess(args, 0, stdout=stdout, stderr="")
+        if args[:3] == ["docker", "network", "create"]:
+            self.network_exists = True
+            return subprocess.CompletedProcess(
+                args,
+                0,
+                stdout=f"{MANAGED_NETWORK_NAME}\n",
+                stderr="",
+            )
         if args[:2] == ["docker", "run"]:
             if self.fail_run:
                 return subprocess.CompletedProcess(args, 1, stdout="", stderr="启动失败")
@@ -204,6 +221,18 @@ class DockerNapCatRuntimeTest(unittest.TestCase):
             f"{MANAGED_LABEL_KEY}={MANAGED_LABEL_VALUE}",
             run_command,
         )
+        self.assertIn("--network", run_command)
+        self.assertIn(MANAGED_NETWORK_NAME, run_command)
+        network_commands = [
+            call[0]
+            for call in self.runner.calls
+            if call[0][:3] == ["docker", "network", "create"]
+        ]
+        self.assertEqual(1, len(network_commands))
+        self.assertIn(
+            f"{MANAGED_LABEL_KEY}={MANAGED_NETWORK_LABEL_VALUE}",
+            network_commands[0],
+        )
         self.assertNotIn("/data/web/qqbot", " ".join(run_command))
         self.assertEqual(
             f"qq-like-napcat-{CONTRIBUTOR_ID[-12:]}",
@@ -213,6 +242,12 @@ class DockerNapCatRuntimeTest(unittest.TestCase):
     def test_runtime_rejects_another_managed_container(self) -> None:
         self.runner.managed_names = ["qq-like-napcat-other"]
         with self.assertRaisesRegex(NapCatRuntimeBusy, "另一个 QQ"):
+            self.runtime.start(CONTRIBUTOR_ID)
+
+    def test_runtime_rejects_same_name_network_without_managed_label(self) -> None:
+        self.runner.network_exists = True
+        self.runner.network_label = ""
+        with self.assertRaisesRegex(NapCatError, "不属于 QQ 互赞工具"):
             self.runtime.start(CONTRIBUTOR_ID)
 
     def test_record_login_adds_only_account_environment(self) -> None:

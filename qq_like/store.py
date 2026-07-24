@@ -127,6 +127,7 @@ class QQLikeStore:
 
     def init_schema(self) -> None:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.db_path.parent.chmod(0o700)
         with self._connect() as conn:
             conn.executescript(
                 """
@@ -209,6 +210,7 @@ class QQLikeStore:
                 );
                 """
             )
+        self.db_path.chmod(0o600)
 
     def create_contributor(self) -> Dict[str, str]:
         self.init_schema()
@@ -617,6 +619,37 @@ class QQLikeStore:
                 LIMIT ?
                 """,
                 (safe_limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def count_retained_contributors(self) -> int:
+        with self._connect() as conn:
+            count = conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM qq_like_contributors
+                WHERE status != 'revoked'
+                """
+            ).fetchone()[0]
+        return int(count)
+
+    def list_stale_pending_contributors(
+        self,
+        *,
+        older_than_hours: int = 24,
+    ) -> List[Dict[str, object]]:
+        cutoff = (
+            self._now() - timedelta(hours=max(1, int(older_than_hours)))
+        ).strftime("%Y-%m-%d %H:%M:%S")
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM qq_like_contributors
+                WHERE status = 'pending_login' AND updated_at <= ?
+                ORDER BY updated_at ASC, id ASC
+                """,
+                (cutoff,),
             ).fetchall()
         return [dict(row) for row in rows]
 

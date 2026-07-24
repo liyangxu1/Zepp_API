@@ -1,3 +1,4 @@
+import os
 import tempfile
 import unittest
 from datetime import datetime, timezone, timedelta
@@ -26,6 +27,21 @@ class QQLikeStoreTest(unittest.TestCase):
         created = self.store.create_contributor()
         self.store.mark_contributor_active(created["contributor_id"], qq_number)
         return created
+
+    def test_storage_permissions_and_stale_pending_detection(self) -> None:
+        self.assertEqual(0o700, os.stat(self.store.db_path.parent).st_mode & 0o777)
+        self.assertEqual(0o600, os.stat(self.store.db_path).st_mode & 0o777)
+
+        pending = self.store.create_contributor()
+        self.create_active("100001")
+        self.assertEqual(2, self.store.count_retained_contributors())
+        self.now += timedelta(hours=25)
+
+        stale = self.store.list_stale_pending_contributors()
+        self.assertEqual(
+            [pending["contributor_id"]],
+            [item["id"] for item in stale],
+        )
 
     def test_create_authenticate_and_recover_contributor(self) -> None:
         created = self.store.create_contributor()

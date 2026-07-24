@@ -202,7 +202,42 @@ BAIDU_SHARE_STORAGE_MAX_GB="20"
 BAIDU_SHARE_CLEANUP_INTERVAL_SECONDS="600"
 ```
 
-### 6) HTTP / HTTPS
+### 6) QQ 互赞工具
+
+QQ 互赞工具使用独立 NapCat 容器保存贡献账号登录态，只调用 OneBot
+`send_like`，不接入消息事件，也不读取聊天记录、联系人或群数据。普通用户需要先扫码贡献一个可用 QQ，每天可发起 1 个任务；系统会选择另一台当天未使用的贡献账号，固定执行 10 次点赞。管理员可以不贡献账号直接提交任务，但仍受可用来源账号和每日来源额度约束。
+
+默认关闭，部署时需要显式启用：
+
+```bash
+QQ_LIKE_ENABLED="1"
+QQ_LIKE_DATA_ROOT="/data/qq-like-tool"
+QQ_LIKE_DB_PATH="/data/qq-like-tool/qq_like.sqlite3"
+QQ_LIKE_WEBUI_PORT="16199"
+QQ_LIKE_ONEBOT_PORT="16100"
+QQ_LIKE_MAX_CONTRIBUTORS="20"
+QQ_LIKE_PENDING_RETENTION_HOURS="24"
+```
+
+运行约束：
+
+- 服务器同时只运行一个互赞专用 NapCat，内存限制 512MB、CPU 限制 0.75 核。
+- WebUI 和 OneBot 端口仅绑定 `127.0.0.1`，使用独立随机密钥。
+- 容器使用 `qq-like-isolated` 独立 Docker 网络，不加入 QQbot 的网络。
+- 每个贡献账号使用独立数据目录；未完成扫码的目录 24 小时后自动清理。
+- 登录信息、恢复码哈希和 SQLite 数据目录不允许提交到 Git。
+- OneBot 返回结果不明确时任务标记为“结果待确认”，不会自动重复点赞。
+
+管理员接口：
+
+```text
+GET  /api/admin/qq-like
+POST /api/admin/qq-like/requests
+```
+
+管理员提交也必须携带唯一的 `Idempotency-Key`，避免超时重试造成重复任务。
+
+### 7) HTTP / HTTPS
 
 默认启动 HTTP：
 

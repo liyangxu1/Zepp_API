@@ -20,6 +20,8 @@ from .store import QQLikeStore, QQLikeStoreError
 
 
 LOGIN_LEASE_NAME = "qq-like-napcat-runtime"
+RATE_LIMIT_MAX_KEYS = 4096
+RATE_LIMIT_RETENTION_SECONDS = 3600
 REQUEST_STATUS_LABELS = {
     "waiting_source": "等待可用账号",
     "assigned": "等待执行",
@@ -72,6 +74,8 @@ class QQMutualLikeService:
         enabled: bool = True,
         login_timeout_seconds: int = 300,
         worker_interval_seconds: float = 3.0,
+        max_contributors: int = 20,
+        pending_retention_hours: int = 24,
         time_factory: Callable[[], float] = time.time,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
@@ -80,15 +84,22 @@ class QQMutualLikeService:
         self.enabled = enabled
         self.login_timeout_seconds = max(60, min(int(login_timeout_seconds), 600))
         self.worker_interval_seconds = max(0.2, float(worker_interval_seconds))
+        self.max_contributors = max(1, min(int(max_contributors), 200))
+        self.pending_retention_hours = max(
+            1,
+            min(int(pending_retention_hours), 24 * 30),
+        )
         self.time_factory = time_factory
         self.sleep = sleep
         self._login_lock = threading.RLock()
         self._active_login: Optional[ActiveLogin] = None
         self._rate_lock = threading.Lock()
         self._rate_events: Dict[str, List[float]] = {}
+        self._rate_last_cleanup = 0.0
         self._worker_wakeup = threading.Event()
         self._worker_stop = threading.Event()
         self._worker_thread: Optional[threading.Thread] = None
+        self._runtime_retry_not_before = 0.0
 
     @classmethod
     def from_paths(
@@ -99,6 +110,8 @@ class QQMutualLikeService:
         enabled: bool,
         webui_port: int = 16199,
         onebot_port: int = 16100,
+        max_contributors: int = 20,
+        pending_retention_hours: int = 24,
     ) -> "QQMutualLikeService":
         return cls(
             QQLikeStore(db_path),
@@ -108,6 +121,8 @@ class QQMutualLikeService:
                 onebot_port=onebot_port,
             ),
             enabled=enabled,
+            max_contributors=max_contributors,
+            pending_retention_hours=pending_retention_hours,
         )
 
     def start(self) -> None:
@@ -115,6 +130,7 @@ class QQMutualLikeService:
             return
         self.store.init_schema()
         self.runtime.stop_all_managed()
+        self._cleanup_stale_pending_contributors()
         self.store.recover_interrupted_requests()
         if self._worker_thread and self._worker_thread.is_alive():
             return
@@ -143,7 +159,7 @@ class QQMutualLikeService:
         user_agent: str = "",
     ) -> Dict[str, Any]:
         self._require_enabled()
-        fingerprint = f"{remote_addr}|{user_agent[:120]}"
+        fingerprint = str(remote_addr or "unknown").strip() or "unknown"
         self._check_rate_limit("login", fingerprint, limit=4, window_seconds=600)
         with self._login_lock:
             self._cleanup_expired_login_locked()
@@ -159,6 +175,14 @@ class QQMutualLikeService:
             if access_token:
                 contributor = self.store.authenticate(access_token)
             else:
+                self._cleanup_stale_pending_contributors()
+                if (
+                    self.store.count_retained_contributors()
+                    >= self.max_contributors
+                ):
+                    raise QQMutualLikeServiceError(
+                        "贡献账号数量已达当前服务器上限，请联系管理员"
+                    )
                 created = self.store.create_contributor()
                 contributor = self.store.get_contributor(created["contributor_id"]) or {}
             contributor_id = str(contributor.get("id") or "")
@@ -307,10 +331,19 @@ class QQMutualLikeService:
         contributor = self.store.authenticate(access_token)
         return self._dashboard_for(contributor)
 
-    def recover_access(self, contributor_id: str, recovery_code: str) -> Dict[str, str]:
+    def recover_access(
+        self,
+        contributor_id: str,
+        recovery_code: str,
+        *,
+        remote_addr: str = "",
+    ) -> Dict[str, str]:
         self._check_rate_limit(
             "recover",
-            str(contributor_id or ""),
+            (
+                f"{str(remote_addr or 'unknown').strip() or 'unknown'}"
+                f"|{str(contributor_id or '').strip()}"
+            ),
             limit=5,
             window_seconds=600,
         )
@@ -396,6 +429,10 @@ class QQMutualLikeService:
         return {
             "status": "success",
             "enabled": self.enabled,
+            "capacity": {
+                "retained_contributors": self.store.count_retained_contributors(),
+                "max_contributors": self.max_contributors,
+            },
             "active_login_contributor_id": (
                 self._active_login.contributor_id if self._active_login else ""
             ),
@@ -405,6 +442,8 @@ class QQMutualLikeService:
 
     def worker_once(self) -> bool:
         if not self.enabled:
+            return False
+        if self.time_factory() < self._runtime_retry_not_before:
             return False
         self.store.assign_pending_requests()
         request = self.store.next_assigned_request()
@@ -435,6 +474,7 @@ class QQMutualLikeService:
                 return True
             expected_qq = str(source.get("qq_number") or "")
             session = self.runtime.start(source_id)
+            self._runtime_retry_not_before = 0.0
             client = self.runtime.onebot_client(session)
             login_info = self._wait_for_onebot_login(
                 client,
@@ -469,14 +509,17 @@ class QQMutualLikeService:
                     result_message=message,
                 )
             else:
-                try:
-                    self.store.update_contributor_status(
-                        source_id,
-                        "offline",
-                        error=message,
-                    )
-                except QQLikeStoreError:
-                    pass
+                if session is not None:
+                    try:
+                        self.store.update_contributor_status(
+                            source_id,
+                            "offline",
+                            error=message,
+                        )
+                    except QQLikeStoreError:
+                        pass
+                else:
+                    self._runtime_retry_not_before = self.time_factory() + 30
                 self.store.release_assignment(
                     request_id,
                     source_id,
@@ -682,6 +725,23 @@ class QQMutualLikeService:
         except NapCatError as exc:
             print(f"删除 QQ 互赞登录信息失败: {exc}")
 
+    def _cleanup_stale_pending_contributors(self) -> int:
+        cleaned = 0
+        for contributor in self.store.list_stale_pending_contributors(
+            older_than_hours=self.pending_retention_hours,
+        ):
+            contributor_id = str(contributor.get("id") or "")
+            if not contributor_id:
+                continue
+            try:
+                self.store.revoke_contributor(contributor_id)
+            except QQLikeStoreError as exc:
+                print(f"清理过期 QQ 互赞扫码账号失败: {exc}")
+                continue
+            self._delete_session_safely(contributor_id)
+            cleaned += 1
+        return cleaned
+
     def _require_enabled(self) -> None:
         if not self.enabled:
             raise QQMutualLikeServiceError("QQ 互赞工具尚未启用")
@@ -697,6 +757,7 @@ class QQMutualLikeService:
         now = self.time_factory()
         key = f"{action}:{fingerprint}"
         with self._rate_lock:
+            self._prune_rate_events_locked(now, incoming_key=key)
             recent = [
                 value
                 for value in self._rate_events.get(key, [])
@@ -706,6 +767,35 @@ class QQMutualLikeService:
                 raise QQMutualLikeServiceError("操作过于频繁，请稍后再试")
             recent.append(now)
             self._rate_events[key] = recent
+
+    def _prune_rate_events_locked(
+        self,
+        now: float,
+        *,
+        incoming_key: str,
+    ) -> None:
+        should_scan = (
+            now - self._rate_last_cleanup >= 60
+            or len(self._rate_events) >= RATE_LIMIT_MAX_KEYS
+        )
+        if should_scan:
+            cutoff = now - RATE_LIMIT_RETENTION_SECONDS
+            for key, values in list(self._rate_events.items()):
+                retained = [value for value in values if value >= cutoff]
+                if retained:
+                    self._rate_events[key] = retained
+                else:
+                    self._rate_events.pop(key, None)
+            self._rate_last_cleanup = now
+        if (
+            incoming_key not in self._rate_events
+            and len(self._rate_events) >= RATE_LIMIT_MAX_KEYS
+        ):
+            oldest_key = min(
+                self._rate_events,
+                key=lambda item: max(self._rate_events[item] or [0.0]),
+            )
+            self._rate_events.pop(oldest_key, None)
 
     @staticmethod
     def _scoped_idempotency_key(

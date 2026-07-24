@@ -1,10 +1,16 @@
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from qq_like.napcat import NapCatProtocolError, NapCatRuntimeBusy, NapCatSession
+from qq_like.napcat import (
+    NapCatError,
+    NapCatProtocolError,
+    NapCatRuntimeBusy,
+    NapCatSession,
+)
 from qq_like.service import QQMutualLikeService, QQMutualLikeServiceError
-from qq_like.store import QQLikeStore
+from qq_like.store import QQLikeStore, QQLikeStoreError
 
 
 class FakeWebUI:
@@ -70,6 +76,8 @@ class FakeRuntime:
         self.likes = []
         self.deleted = []
         self.stop_all_count = 0
+        self.start_count = 0
+        self.start_error = ""
 
     def _session(self, contributor_id):
         root = self.root / contributor_id
@@ -88,6 +96,9 @@ class FakeRuntime:
         )
 
     def start(self, contributor_id):
+        self.start_count += 1
+        if self.start_error:
+            raise NapCatError(self.start_error)
         if self.active_contributor and self.active_contributor != contributor_id:
             raise NapCatRuntimeBusy("busy")
         self.active_contributor = contributor_id
@@ -228,6 +239,28 @@ class QQMutualLikeServiceTest(unittest.TestCase):
         self.assertEqual("execution_uncertain", updated["result_code"])
         self.assertEqual([], self.runtime.likes)
 
+    def test_runtime_start_failure_does_not_disable_source_or_busy_loop(self):
+        requester = self.create_active("100001")
+        source = self.create_active("100002")
+        request = self.service.submit_request(
+            access_token=requester["access_token"],
+            target_qq="3313696759",
+            idempotency_key="runtime-unavailable",
+        )
+        self.runtime.start_error = "Docker 暂时不可用"
+
+        self.assertTrue(self.service.worker_once())
+        self.assertEqual(
+            "active",
+            self.store.get_contributor(source["contributor_id"])["status"],
+        )
+        self.assertIn(
+            self.store.get_request(request["request_id"])["status"],
+            {"waiting_source", "assigned"},
+        )
+        self.assertFalse(self.service.worker_once())
+        self.assertEqual(1, self.runtime.start_count)
+
     def test_revoke_deletes_only_current_tool_session(self):
         contributor = self.create_active("100001")
         result = self.service.revoke(contributor["access_token"])
@@ -259,6 +292,71 @@ class QQMutualLikeServiceTest(unittest.TestCase):
         self.assertEqual(0, self.runtime.stop_all_count)
         with self.assertRaisesRegex(QQMutualLikeServiceError, "尚未启用"):
             disabled.start_login()
+
+    def test_contributor_limit_and_stale_pending_cleanup(self):
+        root = Path(self.temp_dir.name)
+        current_time = [
+            datetime(2026, 7, 24, 10, 0, tzinfo=timezone(timedelta(hours=8)))
+        ]
+        store = QQLikeStore(
+            root / "limited.sqlite3",
+            now_factory=lambda: current_time[0],
+        )
+        runtime = FakeRuntime(root / "limited-runtime")
+        service = QQMutualLikeService(
+            store,
+            runtime,
+            max_contributors=1,
+            pending_retention_hours=24,
+            sleep=lambda _: None,
+        )
+        stale = store.create_contributor()
+        with self.assertRaisesRegex(QQMutualLikeServiceError, "服务器上限"):
+            service.start_login(remote_addr="127.0.0.1")
+
+        current_time[0] += timedelta(hours=25)
+        started = service.start_login(remote_addr="127.0.0.1")
+        self.assertNotEqual(
+            stale["contributor_id"],
+            started["contributor"]["contributor_id"],
+        )
+        self.assertEqual(
+            "revoked",
+            store.get_contributor(stale["contributor_id"])["status"],
+        )
+        self.assertIn(stale["contributor_id"], runtime.deleted)
+
+    def test_recovery_rate_limit_is_scoped_by_remote_address(self):
+        created = self.store.create_contributor()
+        for _ in range(5):
+            with self.assertRaises(QQLikeStoreError):
+                self.service.recover_access(
+                    created["contributor_id"],
+                    "WRONG-CODE",
+                    remote_addr="192.0.2.1",
+                )
+        with self.assertRaisesRegex(QQMutualLikeServiceError, "过于频繁"):
+            self.service.recover_access(
+                created["contributor_id"],
+                "WRONG-CODE",
+                remote_addr="192.0.2.1",
+            )
+        with self.assertRaises(QQLikeStoreError):
+            self.service.recover_access(
+                created["contributor_id"],
+                "WRONG-CODE",
+                remote_addr="192.0.2.2",
+            )
+
+    def test_rate_limit_memory_is_bounded(self):
+        for index in range(4200):
+            self.service._check_rate_limit(
+                "login",
+                f"192.0.2.{index}",
+                limit=4,
+                window_seconds=600,
+            )
+        self.assertLessEqual(len(self.service._rate_events), 4096)
 
 
 if __name__ == "__main__":

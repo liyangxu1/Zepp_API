@@ -9,4 +9,5 @@ device_share_uploads/
 baidu_share_downloads/
 baidu_speed_tests/
 .baidupcs/
+.qq-like-data/
 bin/BaiduPCS-Go

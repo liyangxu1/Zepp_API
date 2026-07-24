@@ -23,6 +23,8 @@ NAPCAT_IMAGE = (
 )
 MANAGED_LABEL_KEY = "com.litianyi.qq-like"
 MANAGED_LABEL_VALUE = "napcat-worker"
+MANAGED_NETWORK_NAME = "qq-like-isolated"
+MANAGED_NETWORK_LABEL_VALUE = "isolated-network"
 CONTRIBUTOR_ID_RE = re.compile(r"^qlc_[0-9a-f]{32}$")
 QQ_NUMBER_RE = re.compile(r"^[1-9][0-9]{4,11}$")
 ALLOWED_ONEBOT_ACTIONS = {
@@ -376,6 +378,7 @@ class DockerNapCatRuntime:
             if managed_names == [session.container_name]:
                 return session
             raise NapCatRuntimeBusy("另一个 QQ 正在登录或执行点赞，请稍后再试")
+        self._ensure_isolated_network()
 
         command = [
             "docker",
@@ -388,6 +391,8 @@ class DockerNapCatRuntime:
             session.container_name,
             "--label",
             f"{MANAGED_LABEL_KEY}={MANAGED_LABEL_VALUE}",
+            "--network",
+            MANAGED_NETWORK_NAME,
             "--memory",
             "512m",
             "--cpus",
@@ -516,6 +521,63 @@ class DockerNapCatRuntime:
             for name in (completed.stdout or "").splitlines()
             if name.strip()
         )
+
+    def _ensure_isolated_network(self) -> None:
+        format_expression = (
+            f'{{{{.Name}}}}|{{{{.Label "{MANAGED_LABEL_KEY}"}}}}'
+        )
+        completed = self.runner.run(
+            [
+                "docker",
+                "network",
+                "ls",
+                "--filter",
+                f"name=^{MANAGED_NETWORK_NAME}$",
+                "--format",
+                format_expression,
+            ],
+            timeout=15,
+        )
+        if completed.returncode != 0:
+            detail = (completed.stderr or completed.stdout or "").strip()[:500]
+            raise NapCatError(
+                f"读取 QQ 互赞隔离网络失败: {detail or 'Docker 返回错误'}"
+            )
+        rows = [
+            row.strip()
+            for row in (completed.stdout or "").splitlines()
+            if row.strip()
+        ]
+        if rows:
+            try:
+                network_name, label_value = rows[0].split("|", 1)
+            except ValueError as exc:
+                raise NapCatError("QQ 互赞隔离网络返回格式错误") from exc
+            if (
+                network_name != MANAGED_NETWORK_NAME
+                or label_value != MANAGED_NETWORK_LABEL_VALUE
+            ):
+                raise NapCatError("同名 Docker 网络不属于 QQ 互赞工具")
+            return
+
+        created = self.runner.run(
+            [
+                "docker",
+                "network",
+                "create",
+                "--driver",
+                "bridge",
+                "--label",
+                f"{MANAGED_LABEL_KEY}={MANAGED_NETWORK_LABEL_VALUE}",
+                MANAGED_NETWORK_NAME,
+            ],
+            timeout=30,
+        )
+        if created.returncode != 0:
+            detail = (created.stderr or created.stdout or "").strip()[:500]
+            raise NapCatError(
+                f"创建 QQ 互赞隔离网络失败: {detail or 'Docker 返回错误'}"
+            )
 
     @staticmethod
     def _write_onebot_config(path: Path, token: str) -> None:
