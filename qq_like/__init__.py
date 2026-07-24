@@ -9,6 +9,7 @@ from .napcat import (
     NapCatSession,
     NapCatWebUIClient,
 )
+from .service import QQMutualLikeService, QQMutualLikeServiceError
 from .store import QQLikeStore, QQLikeStoreError
 
 __all__ = [
@@ -19,6 +20,8 @@ __all__ = [
     "NapCatRuntimeBusy",
     "NapCatSession",
     "NapCatWebUIClient",
+    "QQMutualLikeService",
+    "QQMutualLikeServiceError",
     "QQLikeStore",
     "QQLikeStoreError",
 ]

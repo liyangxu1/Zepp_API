@@ -59,7 +59,10 @@ class FakeRunner:
             self.managed_names = [container_name]
             return subprocess.CompletedProcess(args, 0, stdout="container-id\n", stderr="")
         if args[:2] == ["docker", "stop"]:
-            self.managed_names = []
+            container_name = args[-1]
+            self.managed_names = [
+                name for name in self.managed_names if name != container_name
+            ]
             return subprocess.CompletedProcess(args, 0, stdout="stopped\n", stderr="")
         raise AssertionError(f"未预期的命令: {args}")
 
@@ -226,6 +229,31 @@ class DockerNapCatRuntimeTest(unittest.TestCase):
             ["docker", "stop", "--time", "20", session.container_name],
             stop_command,
         )
+
+    def test_stop_all_only_targets_labeled_qq_like_containers(self) -> None:
+        self.runner.managed_names = [
+            "qq-like-napcat-first",
+            "qq-like-napcat-second",
+        ]
+        self.assertEqual(2, self.runtime.stop_all_managed())
+        stop_commands = [
+            call[0] for call in self.runner.calls if call[0][:2] == ["docker", "stop"]
+        ]
+        self.assertEqual(
+            [
+                ["docker", "stop", "--time", "20", "qq-like-napcat-first"],
+                ["docker", "stop", "--time", "20", "qq-like-napcat-second"],
+            ],
+            stop_commands,
+        )
+        self.assertNotIn("qqbot-napcat", " ".join(" ".join(item) for item in stop_commands))
+
+    def test_delete_session_removes_only_validated_contributor_directory(self) -> None:
+        session = self.runtime.prepare_session(CONTRIBUTOR_ID)
+        marker = session.root / "qq" / "login-state"
+        marker.write_text("test", encoding="utf-8")
+        self.runtime.delete_session(CONTRIBUTOR_ID)
+        self.assertFalse(session.root.exists())
 
     def test_qr_reader_requires_png_signature(self) -> None:
         session = self.runtime.prepare_session(CONTRIBUTOR_ID)

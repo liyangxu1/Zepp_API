@@ -7,6 +7,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import subprocess
 import time
 import urllib.error
@@ -435,6 +436,28 @@ class DockerNapCatRuntime:
         if completed.returncode != 0:
             detail = (completed.stderr or completed.stdout or "").strip()[:500]
             raise NapCatError(f"停止 NapCat 失败: {detail or 'Docker 返回错误'}")
+
+    def stop_all_managed(self) -> int:
+        stopped = 0
+        for container_name in self._managed_container_names():
+            completed = self.runner.run(
+                ["docker", "stop", "--time", "20", container_name],
+                timeout=40,
+            )
+            if completed.returncode != 0:
+                detail = (completed.stderr or completed.stdout or "").strip()[:500]
+                raise NapCatError(
+                    f"停止遗留 NapCat 失败: {detail or 'Docker 返回错误'}"
+                )
+            stopped += 1
+        return stopped
+
+    def delete_session(self, contributor_id: str) -> None:
+        session = self.prepare_session(contributor_id)
+        if session.container_name in self._managed_container_names():
+            raise NapCatError("贡献账号仍在运行，不能删除登录信息")
+        if session.root.exists():
+            shutil.rmtree(session.root)
 
     def wait_for_webui(
         self,

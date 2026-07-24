@@ -104,6 +104,22 @@ class QQLikeStoreTest(unittest.TestCase):
         )
         self.assertEqual(first["id"], second["id"])
 
+    def test_idempotency_cannot_cross_contributors(self) -> None:
+        requester_one = self.create_active("100001")
+        requester_two = self.create_active("100002")
+        self.create_active("100003")
+        self.store.create_request(
+            contributor_id=requester_one["contributor_id"],
+            target_qq="3313696759",
+            idempotency_key="same-key",
+        )
+        with self.assertRaisesRegex(QQLikeStoreError, "其他请求"):
+            self.store.create_request(
+                contributor_id=requester_two["contributor_id"],
+                target_qq="3313696760",
+                idempotency_key="same-key",
+            )
+
     def test_source_account_is_used_once_per_day(self) -> None:
         source_one = self.create_active("100001")
         source_two = self.create_active("100002")
@@ -186,6 +202,72 @@ class QQLikeStoreTest(unittest.TestCase):
             replacement["contributor_id"],
             updated["source_contributor_id"],
         )
+
+    def test_release_offline_source_reassigns_without_consuming_it(self) -> None:
+        requester = self.create_active("100001")
+        source = self.create_active("100002")
+        request = self.store.create_request(
+            contributor_id=requester["contributor_id"],
+            target_qq="3313696759",
+            idempotency_key="offline-source",
+        )
+        self.assertEqual(source["contributor_id"], request["source_contributor_id"])
+        replacement = self.create_active("100003")
+        self.store.update_contributor_status(
+            source["contributor_id"],
+            "offline",
+            error="登录态失效",
+        )
+        self.assertTrue(
+            self.store.release_assignment(
+                request["id"],
+                source["contributor_id"],
+                reason="登录态失效",
+            )
+        )
+        updated = self.store.get_request(request["id"])
+        self.assertEqual("assigned", updated["status"])
+        self.assertEqual(
+            replacement["contributor_id"],
+            updated["source_contributor_id"],
+        )
+
+        self.store.update_contributor_status(
+            requester["contributor_id"],
+            "paused",
+        )
+        self.store.update_contributor_status(
+            replacement["contributor_id"],
+            "paused",
+        )
+        self.store.mark_contributor_active(
+            source["contributor_id"],
+            "100002",
+        )
+        admin_request = self.store.create_request(
+            admin=True,
+            target_qq="3313696760",
+            idempotency_key="reuse-recovered-source-capacity",
+        )
+        self.assertEqual(
+            source["contributor_id"],
+            admin_request["source_contributor_id"],
+        )
+
+    def test_interrupted_running_request_becomes_uncertain(self) -> None:
+        source = self.create_active("100001")
+        request = self.store.create_request(
+            admin=True,
+            target_qq="3313696759",
+            idempotency_key="interrupted",
+        )
+        self.assertTrue(
+            self.store.begin_request(request["id"], source["contributor_id"])
+        )
+        self.assertEqual(1, self.store.recover_interrupted_requests())
+        recovered = self.store.get_request(request["id"])
+        self.assertEqual("uncertain", recovered["status"])
+        self.assertEqual("worker_interrupted", recovered["result_code"])
 
     def test_runtime_lease_allows_only_one_owner(self) -> None:
         self.assertTrue(

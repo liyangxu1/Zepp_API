@@ -445,6 +445,13 @@ class QQLikeStore:
                     (clean_idempotency,),
                 ).fetchone()
                 if existing is not None:
+                    same_requester = (
+                        existing["requester_kind"] == requester_kind
+                        and existing["contributor_id"] == contributor_id
+                        and existing["target_qq"] == normalized_target
+                    )
+                    if not same_requester:
+                        raise QQLikeStoreError("幂等请求 ID 已被其他请求使用")
                     return dict(existing)
 
                 if contributor_id:
@@ -599,6 +606,55 @@ class QQLikeStore:
             rows = conn.execute(query, tuple(params)).fetchall()
         return [dict(row) for row in rows]
 
+    def list_contributors(self, limit: int = 200) -> List[Dict[str, object]]:
+        safe_limit = max(1, min(int(limit), 500))
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM qq_like_contributors
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?
+                """,
+                (safe_limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def contributor_daily_summary(self, contributor_id: str) -> Dict[str, int]:
+        business_date = self.business_date()
+        with self._connect() as conn:
+            request_count = conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM qq_like_requests
+                WHERE contributor_id = ? AND business_date = ?
+                  AND status != 'canceled'
+                """,
+                (contributor_id, business_date),
+            ).fetchone()[0]
+            source_count = conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM qq_like_source_usage
+                WHERE source_contributor_id = ? AND business_date = ?
+                """,
+                (contributor_id, business_date),
+            ).fetchone()[0]
+            queued_count = conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM qq_like_requests
+                WHERE contributor_id = ?
+                  AND status IN ('waiting_source', 'assigned', 'running')
+                """,
+                (contributor_id,),
+            ).fetchone()[0]
+        return {
+            "request_used": int(request_count),
+            "source_used": int(source_count),
+            "queued_requests": int(queued_count),
+        }
+
     def next_assigned_request(self) -> Optional[Dict[str, object]]:
         with self._connect() as conn:
             row = conn.execute(
@@ -625,6 +681,63 @@ class QQLikeStore:
                 (now, now, request_id, source_contributor_id),
             )
         return cursor.rowcount == 1
+
+    def release_assignment(
+        self,
+        request_id: str,
+        source_contributor_id: str,
+        *,
+        reason: str = "",
+    ) -> bool:
+        now = self._now_text()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                """
+                SELECT status, source_contributor_id
+                FROM qq_like_requests
+                WHERE id = ?
+                """,
+                (request_id,),
+            ).fetchone()
+            if (
+                row is None
+                or row["status"] != "assigned"
+                or row["source_contributor_id"] != source_contributor_id
+            ):
+                return False
+            conn.execute(
+                "DELETE FROM qq_like_source_usage WHERE request_id = ?",
+                (request_id,),
+            )
+            conn.execute(
+                """
+                UPDATE qq_like_requests
+                SET source_contributor_id = NULL, status = 'waiting_source',
+                    result_code = 'source_unavailable', result_message = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (str(reason or "来源账号暂不可用")[:500], now, request_id),
+            )
+        self.assign_pending_requests()
+        return True
+
+    def recover_interrupted_requests(self) -> int:
+        now = self._now_text()
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE qq_like_requests
+                SET status = 'uncertain',
+                    result_code = 'worker_interrupted',
+                    result_message = '执行器重启，结果需要人工确认',
+                    finished_at = ?, updated_at = ?
+                WHERE status = 'running'
+                """,
+                (now, now),
+            )
+        return cursor.rowcount
 
     def finish_request(
         self,

@@ -45,6 +45,13 @@ from tempfile import NamedTemporaryFile
 from typing import Dict, Optional, Tuple, Union
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from qq_like import (
+    NapCatError,
+    QQLikeStoreError,
+    QQMutualLikeService,
+    QQMutualLikeServiceError,
+)
+
 
 def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
     try:
@@ -187,6 +194,26 @@ ADMIN_PASSWORD = os.environ.get("ZEPP_ADMIN_PASSWORD", "").strip()
 ADMIN_SESSION_COOKIE = "zepp_admin_session"
 ADMIN_SESSION_TTL_SECONDS = 8 * 60 * 60
 ADMIN_SESSIONS: Dict[str, dict] = {}
+QQ_LIKE_ENABLED = os.environ.get("QQ_LIKE_ENABLED", "0").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+QQ_LIKE_DATA_ROOT = Path(
+    os.environ.get(
+        "QQ_LIKE_DATA_ROOT",
+        str(Path(__file__).with_name(".qq-like-data")),
+    )
+).expanduser()
+QQ_LIKE_DB_PATH = Path(
+    os.environ.get(
+        "QQ_LIKE_DB_PATH",
+        str(QQ_LIKE_DATA_ROOT / "qq_like.sqlite3"),
+    )
+).expanduser()
+QQ_LIKE_WEBUI_PORT = _env_int("QQ_LIKE_WEBUI_PORT", 16199, 1024, 65535)
+QQ_LIKE_ONEBOT_PORT = _env_int("QQ_LIKE_ONEBOT_PORT", 16100, 1024, 65535)
 DEVICE_BIND_QR_ENV = os.environ.get("DEVICE_BIND_QR_PATH", "").strip()
 DEVICE_BIND_QR_TOKEN_TTL_SECONDS = 120
 DEVICE_BIND_QR_UNAVAILABLE_MESSAGE = "当前二维码有设备未解绑，暂时不能使用，请联系管理员。"
@@ -7144,6 +7171,15 @@ def _run_http_server(
     ssl_cert: Optional[str] = None,
     ssl_key: Optional[str] = None,
 ) -> None:
+    qq_like_service = QQMutualLikeService.from_paths(
+        db_path=QQ_LIKE_DB_PATH,
+        data_root=QQ_LIKE_DATA_ROOT,
+        enabled=QQ_LIKE_ENABLED,
+        webui_port=QQ_LIKE_WEBUI_PORT,
+        onebot_port=QQ_LIKE_ONEBOT_PORT,
+    )
+    qq_like_runtime_state = {"startup_error": ""}
+
     class ZeppThreadingHTTPServer(ThreadingHTTPServer):
         daemon_threads = True
         allow_reuse_address = True
@@ -7216,6 +7252,22 @@ def _run_http_server(
             data = html.encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "text/html; charset=utf-8")
+            for key, value in (headers or {}).items():
+                self.send_header(key, value)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def _binary_response(
+            self,
+            data: bytes,
+            *,
+            content_type: str,
+            status: int = 200,
+            headers: Optional[Dict[str, str]] = None,
+        ) -> None:
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
             for key, value in (headers or {}).items():
                 self.send_header(key, value)
             self.send_header("Content-Length", str(len(data)))
@@ -7365,6 +7417,57 @@ def _run_http_server(
                 return
             self._json_response(rotate_daily_token(), headers=self._admin_headers())
 
+        def _handle_admin_qq_like_overview(self) -> None:
+            if self.command != "GET":
+                self._json_response(
+                    {"status": "failed", "error": "只支持 GET"},
+                    status=405,
+                    headers=self._admin_headers(),
+                )
+                return
+            if not self._admin_require_auth():
+                return
+            if not self._qq_like_available():
+                return
+            self._json_response(
+                qq_like_service.admin_overview(),
+                headers=self._admin_headers(),
+            )
+
+        def _handle_admin_qq_like_request(self, params: Dict[str, str]) -> None:
+            if self.command != "POST":
+                self._json_response(
+                    {"status": "failed", "error": "只支持 POST"},
+                    status=405,
+                    headers=self._admin_headers(),
+                )
+                return
+            if not self._admin_require_auth():
+                return
+            if not self._qq_like_available():
+                return
+            try:
+                request_key = (
+                    (self.headers.get("Idempotency-Key") or "").strip()
+                    or params.get("request_id", "")
+                )
+                request = qq_like_service.submit_admin_request(
+                    target_qq=params.get("target_qq", ""),
+                    idempotency_key=request_key,
+                    remote_addr=self.client_address[0] if self.client_address else "",
+                )
+            except (
+                NapCatError,
+                QQLikeStoreError,
+                QQMutualLikeServiceError,
+            ) as exc:
+                self._qq_like_error(exc)
+                return
+            self._json_response(
+                {"status": "success", "request": request},
+                headers=self._admin_headers(),
+            )
+
         def _admin_page_response(self) -> None:
             if not self._admin_access_allowed():
                 self._html_response(
@@ -7389,6 +7492,225 @@ def _run_http_server(
                 status=403,
             )
             return False
+
+        def _qq_like_headers(self) -> Dict[str, str]:
+            return {
+                "Cache-Control": "no-store, no-cache, must-revalidate, private, max-age=0",
+                "Pragma": "no-cache",
+                "Expires": "0",
+                "X-Robots-Tag": "noindex, nofollow, noarchive",
+                "Referrer-Policy": "same-origin",
+            }
+
+        def _qq_like_access_token(self) -> str:
+            explicit = (self.headers.get("X-QQ-Like-Token") or "").strip()
+            if explicit:
+                return explicit
+            authorization = (self.headers.get("Authorization") or "").strip()
+            if authorization.lower().startswith("bearer "):
+                return authorization[7:].strip()
+            return ""
+
+        def _qq_like_available(self) -> bool:
+            if not QQ_LIKE_ENABLED:
+                self._json_response(
+                    {
+                        "status": "failed",
+                        "error": "QQ 互赞工具尚未启用",
+                    },
+                    status=503,
+                    headers=self._qq_like_headers(),
+                )
+                return False
+            startup_error = qq_like_runtime_state.get("startup_error", "")
+            if startup_error:
+                self._json_response(
+                    {
+                        "status": "failed",
+                        "error": "QQ 互赞执行器暂不可用",
+                    },
+                    status=503,
+                    headers=self._qq_like_headers(),
+                )
+                return False
+            return True
+
+        def _qq_like_error(self, exc: Exception) -> None:
+            message = str(exc or "QQ 互赞请求失败")
+            status = 400
+            if "凭证" in message:
+                status = 401
+            elif "正在" in message or "稍后" in message:
+                status = 409
+            elif isinstance(exc, NapCatError):
+                status = 503
+            self._json_response(
+                {
+                    "status": "failed",
+                    "error": message[:300],
+                },
+                status=status,
+                headers=self._qq_like_headers(),
+            )
+
+        def _handle_qq_like(self, path: str, params: Dict[str, str]) -> bool:
+            if not path.startswith("/api/tools/qq-like"):
+                return False
+            if not self._qq_like_available():
+                return True
+            headers = self._qq_like_headers()
+            access_token = self._qq_like_access_token()
+            remote_addr = self.client_address[0] if self.client_address else ""
+            user_agent = self.headers.get("User-Agent", "")
+            try:
+                if path == "/api/tools/qq-like/login/start":
+                    if self.command != "POST":
+                        self._json_response(
+                            {"status": "failed", "error": "只支持 POST"},
+                            status=405,
+                            headers=headers,
+                        )
+                        return True
+                    payload = qq_like_service.start_login(
+                        access_token=access_token,
+                        remote_addr=remote_addr,
+                        user_agent=user_agent,
+                    )
+                    self._json_response(payload, headers=headers)
+                    return True
+
+                if path == "/api/tools/qq-like/login/status":
+                    if self.command != "GET":
+                        self._json_response(
+                            {"status": "failed", "error": "只支持 GET"},
+                            status=405,
+                            headers=headers,
+                        )
+                        return True
+                    self._json_response(
+                        qq_like_service.poll_login(access_token),
+                        headers=headers,
+                    )
+                    return True
+
+                if path == "/api/tools/qq-like/login/qr":
+                    if self.command != "GET":
+                        self._json_response(
+                            {"status": "failed", "error": "只支持 GET"},
+                            status=405,
+                            headers=headers,
+                        )
+                        return True
+                    self._binary_response(
+                        qq_like_service.read_login_qr(access_token),
+                        content_type="image/png",
+                        headers=headers,
+                    )
+                    return True
+
+                if path == "/api/tools/qq-like/login/refresh":
+                    if self.command != "POST":
+                        self._json_response(
+                            {"status": "failed", "error": "只支持 POST"},
+                            status=405,
+                            headers=headers,
+                        )
+                        return True
+                    self._json_response(
+                        qq_like_service.refresh_login_qr(access_token),
+                        headers=headers,
+                    )
+                    return True
+
+                if path == "/api/tools/qq-like/dashboard":
+                    if self.command != "GET":
+                        self._json_response(
+                            {"status": "failed", "error": "只支持 GET"},
+                            status=405,
+                            headers=headers,
+                        )
+                        return True
+                    self._json_response(
+                        qq_like_service.dashboard(access_token),
+                        headers=headers,
+                    )
+                    return True
+
+                if path == "/api/tools/qq-like/requests":
+                    if self.command == "GET":
+                        self._json_response(
+                            qq_like_service.dashboard(access_token),
+                            headers=headers,
+                        )
+                        return True
+                    if self.command != "POST":
+                        self._json_response(
+                            {"status": "failed", "error": "只支持 GET 或 POST"},
+                            status=405,
+                            headers=headers,
+                        )
+                        return True
+                    request_key = (
+                        (self.headers.get("Idempotency-Key") or "").strip()
+                        or params.get("request_id", "")
+                    )
+                    request = qq_like_service.submit_request(
+                        access_token=access_token,
+                        target_qq=params.get("target_qq", ""),
+                        idempotency_key=request_key,
+                        remote_addr=remote_addr,
+                    )
+                    self._json_response(
+                        {"status": "success", "request": request},
+                        headers=headers,
+                    )
+                    return True
+
+                if path == "/api/tools/qq-like/revoke":
+                    if self.command != "POST":
+                        self._json_response(
+                            {"status": "failed", "error": "只支持 POST"},
+                            status=405,
+                            headers=headers,
+                        )
+                        return True
+                    self._json_response(
+                        qq_like_service.revoke(access_token),
+                        headers=headers,
+                    )
+                    return True
+
+                if path == "/api/tools/qq-like/access/recover":
+                    if self.command != "POST":
+                        self._json_response(
+                            {"status": "failed", "error": "只支持 POST"},
+                            status=405,
+                            headers=headers,
+                        )
+                        return True
+                    payload = qq_like_service.recover_access(
+                        params.get("contributor_id", ""),
+                        params.get("recovery_code", ""),
+                    )
+                    self._json_response(
+                        {"status": "success", **payload},
+                        headers=headers,
+                    )
+                    return True
+
+                self._json_response(
+                    {"status": "failed", "error": "未知 QQ 互赞接口"},
+                    status=404,
+                    headers=headers,
+                )
+                return True
+            except (
+                NapCatError,
+                QQLikeStoreError,
+                QQMutualLikeServiceError,
+            ) as exc:
+                self._qq_like_error(exc)
+                return True
 
         def _asset_response(self, path: str) -> bool:
             asset_map = {
@@ -8218,6 +8540,14 @@ def _run_http_server(
                 self._handle_admin_rotate_daily_token()
                 return
 
+            if path == "/api/admin/qq-like":
+                self._handle_admin_qq_like_overview()
+                return
+
+            if path == "/api/admin/qq-like/requests":
+                self._handle_admin_qq_like_request(params)
+                return
+
             if path == "/api/admin/baidu-share/worker":
                 self._handle_admin_baidu_share_worker_status()
                 return
@@ -8244,6 +8574,9 @@ def _run_http_server(
 
             if path == "/api/admin/baidu-share/qr/image":
                 self._handle_admin_baidu_share_qr_image(params)
+                return
+
+            if self._handle_qq_like(path, params):
                 return
 
             if path == "/api/device-bind/status":
@@ -8449,10 +8782,20 @@ def _run_http_server(
     init_device_binding_db()
     init_zepp_token_cache_db()
     get_or_create_daily_token()
+    if QQ_LIKE_ENABLED:
+        try:
+            qq_like_service.start()
+        except Exception as exc:
+            qq_like_runtime_state["startup_error"] = str(exc)[:300]
+            qq_like_service.enabled = False
+            print(f"QQ 互赞执行器启动失败，原有工具继续运行: {exc}")
     if BAIDU_SHARE_WORKER_ENABLED:
         threading.Thread(target=baidu_share_worker_loop, name="baidu-share-worker", daemon=True).start()
     print(f"Serving on {scheme}://{host}:{port}")
-    httpd.serve_forever()
+    try:
+        httpd.serve_forever()
+    finally:
+        qq_like_service.stop()
 
 
 def parse_args() -> argparse.Namespace:
