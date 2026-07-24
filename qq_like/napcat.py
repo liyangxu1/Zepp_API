@@ -48,6 +48,18 @@ class NapCatProtocolError(NapCatError):
     """NapCat 返回了无法安全处理的响应。"""
 
 
+class NapCatConnectionError(NapCatProtocolError):
+    """NapCat 本机接口暂时无法连接。"""
+
+
+class NapCatWebUIRateLimitError(NapCatProtocolError):
+    """NapCat WebUI 登录接口触发频率限制。"""
+
+
+class NapCatWebUICredentialError(NapCatProtocolError):
+    """NapCat WebUI 凭证已经失效。"""
+
+
 class JsonTransport(Protocol):
     """JSON HTTP 传输协议，便于在测试中替换。"""
 
@@ -101,9 +113,9 @@ class UrllibJsonTransport:
                 f"NapCat HTTP {exc.code}: {detail or exc.reason}"
             ) from exc
         except urllib.error.URLError as exc:
-            raise NapCatProtocolError(f"NapCat 连接失败: {exc.reason}") from exc
+            raise NapCatConnectionError(f"NapCat 连接失败: {exc.reason}") from exc
         except OSError as exc:
-            raise NapCatProtocolError(f"NapCat 连接失败: {exc}") from exc
+            raise NapCatConnectionError(f"NapCat 连接失败: {exc}") from exc
         try:
             decoded = json.loads(raw_body.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -235,6 +247,19 @@ class NapCatWebUIClient:
     def _require_webui_success(response: Dict[str, Any]) -> Dict[str, Any]:
         if response.get("code") != 0:
             message = str(response.get("message") or "NapCat WebUI 请求失败")
+            normalized_message = message.lower()
+            if "rate limit" in normalized_message or "频率" in message:
+                raise NapCatWebUIRateLimitError(message)
+            if any(
+                keyword in normalized_message
+                for keyword in (
+                    "credential",
+                    "unauthorized",
+                    "authentication",
+                    "token expired",
+                )
+            ) or any(keyword in message for keyword in ("凭证失效", "鉴权失败")):
+                raise NapCatWebUICredentialError(message)
             raise NapCatProtocolError(message)
         data = response.get("data")
         if data is None:
@@ -452,6 +477,7 @@ class DockerNapCatRuntime:
         if completed.returncode != 0:
             detail = (completed.stderr or completed.stdout or "").strip()[:500]
             raise NapCatError(f"停止 NapCat 失败: {detail or 'Docker 返回错误'}")
+        self._wait_for_container_removal(session.container_name)
 
     def stop_all_managed(self) -> int:
         stopped = 0
@@ -465,6 +491,7 @@ class DockerNapCatRuntime:
                 raise NapCatError(
                     f"停止遗留 NapCat 失败: {detail or 'Docker 返回错误'}"
                 )
+            self._wait_for_container_removal(container_name)
             stopped += 1
         return stopped
 
@@ -491,9 +518,11 @@ class DockerNapCatRuntime:
             try:
                 client.login()
                 return client
-            except NapCatProtocolError as exc:
+            except NapCatConnectionError as exc:
                 last_error = exc
                 time.sleep(max(0.0, interval_seconds))
+            except NapCatProtocolError:
+                raise
         raise NapCatError(f"NapCat WebUI 启动超时: {last_error or '未知错误'}")
 
     def onebot_client(self, session: NapCatSession) -> NapCatOneBotClient:
@@ -503,13 +532,48 @@ class DockerNapCatRuntime:
         )
 
     def read_qr_code_png(self, session: NapCatSession) -> bytes:
+        return self.read_qr_code_png_with_revision(session)[0]
+
+    def read_qr_code_png_with_revision(
+        self,
+        session: NapCatSession,
+    ) -> tuple[bytes, str]:
         try:
             payload = session.qr_code_path.read_bytes()
         except OSError as exc:
             raise NapCatError("登录二维码文件尚未生成") from exc
         if not payload.startswith(b"\x89PNG\r\n\x1a\n"):
             raise NapCatError("登录二维码文件不是有效 PNG")
-        return payload
+        return payload, hashlib.sha256(payload).hexdigest()[:16]
+
+    def clear_qr_code(self, session: NapCatSession) -> None:
+        try:
+            session.qr_code_path.unlink()
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            raise NapCatError("清理旧登录二维码失败") from exc
+
+    def wait_for_qr_code(
+        self,
+        session: NapCatSession,
+        *,
+        previous_revision: str = "",
+        attempts: int = 30,
+        interval_seconds: float = 0.1,
+    ) -> tuple[bytes, str]:
+        last_error: Optional[Exception] = None
+        for _ in range(max(1, attempts)):
+            try:
+                payload, revision = self.read_qr_code_png_with_revision(session)
+                if not previous_revision or revision != previous_revision:
+                    return payload, revision
+            except NapCatError as exc:
+                last_error = exc
+            time.sleep(max(0.0, interval_seconds))
+        if previous_revision:
+            raise NapCatError("新的登录二维码尚未生成")
+        raise NapCatError(f"登录二维码尚未生成: {last_error or '等待文件写入'}")
 
     def managed_containers(self) -> List[ManagedNapCatContainer]:
         """返回互赞工具容器，并读取新容器携带的完整贡献账号标签。"""
@@ -550,6 +614,19 @@ class DockerNapCatRuntime:
 
     def _managed_container_names(self) -> List[str]:
         return [item.name for item in self.managed_containers()]
+
+    def _wait_for_container_removal(
+        self,
+        container_name: str,
+        *,
+        attempts: int = 50,
+        interval_seconds: float = 0.1,
+    ) -> bool:
+        for _ in range(max(1, attempts)):
+            if container_name not in self._managed_container_names():
+                return True
+            time.sleep(max(0.0, interval_seconds))
+        return container_name not in self._managed_container_names()
 
     def _ensure_isolated_network(self) -> None:
         format_expression = (

@@ -15,11 +15,14 @@ from qq_like.napcat import (
     NAPCAT_IMAGE,
     DockerNapCatRuntime,
     NapCatError,
+    NapCatConnectionError,
     NapCatOneBotClient,
     NapCatProtocolError,
     NapCatRuntimeBusy,
     UrllibJsonTransport,
     NapCatWebUIClient,
+    NapCatWebUICredentialError,
+    NapCatWebUIRateLimitError,
 )
 
 
@@ -144,8 +147,31 @@ class NapCatWebUIClientTest(unittest.TestCase):
             "qq_like.napcat.urllib.request.urlopen",
             side_effect=ConnectionResetError("连接被重置"),
         ):
-            with self.assertRaisesRegex(NapCatProtocolError, "连接失败"):
+            with self.assertRaisesRegex(NapCatConnectionError, "连接失败"):
                 transport.post_json("/api/auth/login", {"hash": "test"})
+
+    def test_webui_rate_limit_and_expired_credential_are_distinct(self) -> None:
+        rate_limited = NapCatWebUIClient(
+            FakeTransport(
+                [{"code": 1, "message": "login rate limit", "data": None}]
+            ),
+            "secret",
+        )
+        with self.assertRaises(NapCatWebUIRateLimitError):
+            rate_limited.login()
+
+        expired = NapCatWebUIClient(
+            FakeTransport(
+                [
+                    {"code": 0, "data": {"Credential": "credential"}},
+                    {"code": 401, "message": "credential expired", "data": None},
+                ]
+            ),
+            "secret",
+        )
+        expired.login()
+        with self.assertRaises(NapCatWebUICredentialError):
+            expired.check_login_status()
 
 
 class NapCatOneBotClientTest(unittest.TestCase):
@@ -303,7 +329,11 @@ class DockerNapCatRuntimeTest(unittest.TestCase):
     def test_stop_only_targets_current_managed_container(self) -> None:
         session = self.runtime.start(CONTRIBUTOR_ID)
         self.runtime.stop(CONTRIBUTOR_ID)
-        stop_command = self.runner.calls[-1][0]
+        stop_command = [
+            call[0]
+            for call in self.runner.calls
+            if call[0][:2] == ["docker", "stop"]
+        ][-1]
         self.assertEqual(
             ["docker", "stop", "--time", "20", session.container_name],
             stop_command,
@@ -343,6 +373,36 @@ class DockerNapCatRuntimeTest(unittest.TestCase):
         self.assertTrue(
             self.runtime.read_qr_code_png(session).startswith(b"\x89PNG")
         )
+
+    def test_qr_revision_changes_only_when_png_content_changes(self) -> None:
+        session = self.runtime.prepare_session(CONTRIBUTOR_ID)
+        session.qr_code_path.write_bytes(b"\x89PNG\r\n\x1a\nfirst")
+        _, first_revision = self.runtime.read_qr_code_png_with_revision(session)
+        _, repeated_revision = self.runtime.wait_for_qr_code(session)
+        self.assertEqual(first_revision, repeated_revision)
+
+        session.qr_code_path.write_bytes(b"\x89PNG\r\n\x1a\nsecond")
+        _, second_revision = self.runtime.wait_for_qr_code(
+            session,
+            previous_revision=first_revision,
+            attempts=1,
+            interval_seconds=0,
+        )
+        self.assertNotEqual(first_revision, second_revision)
+
+    def test_clear_qr_code_prevents_reusing_stale_file(self) -> None:
+        session = self.runtime.prepare_session(CONTRIBUTOR_ID)
+        session.qr_code_path.write_bytes(b"\x89PNG\r\n\x1a\nstale")
+
+        self.runtime.clear_qr_code(session)
+
+        self.assertFalse(session.qr_code_path.exists())
+        with self.assertRaisesRegex(NapCatError, "尚未生成"):
+            self.runtime.wait_for_qr_code(
+                session,
+                attempts=1,
+                interval_seconds=0,
+            )
 
     def test_invalid_contributor_id_cannot_escape_session_root(self) -> None:
         with self.assertRaisesRegex(NapCatError, "ID 格式"):

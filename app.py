@@ -6201,6 +6201,7 @@ def _simple_page_html() -> str:
     let qqLikeLoginTimer = null
     let qqLikeDashboardTimer = null
     let qqLikeQrObjectUrl = ''
+    let qqLikeQrRevision = ''
     let qqLikeDashboardData = null
 
     function escapeHtml(value) {
@@ -6424,6 +6425,7 @@ def _simple_page_html() -> str:
         URL.revokeObjectURL(qqLikeQrObjectUrl)
         qqLikeQrObjectUrl = ''
       }
+      qqLikeQrRevision = ''
       qqLikeQrImage.removeAttribute('src')
     }
 
@@ -6583,8 +6585,7 @@ def _simple_page_html() -> str:
       qqLikeTaskSummary.textContent = `目标 ${request.target_qq}：${request.status_label || request.status}${request.result_message ? `，${request.result_message}` : ''}`
     }
 
-    async function loadQQLikeQr() {
-      clearQQLikeQrImage()
+    async function loadQQLikeQr(expectedRevision = '') {
       const response = await fetch('/api/tools/qq-like/login/qr', {
         cache: 'no-store',
         headers: qqLikeRequestHeaders(false),
@@ -6594,8 +6595,18 @@ def _simple_page_html() -> str:
         throw new Error(data.error || '二维码加载失败')
       }
       const blob = await response.blob()
-      qqLikeQrObjectUrl = URL.createObjectURL(blob)
+      const nextObjectUrl = URL.createObjectURL(blob)
+      if (qqLikeQrObjectUrl) {
+        URL.revokeObjectURL(qqLikeQrObjectUrl)
+      }
+      qqLikeQrObjectUrl = nextObjectUrl
       qqLikeQrImage.src = qqLikeQrObjectUrl
+      qqLikeQrRevision = (
+        response.headers.get('X-QQ-Like-QR-Revision')
+        || expectedRevision
+        || ''
+      ).trim()
+      return qqLikeQrRevision
     }
 
     function scheduleQQLikeLoginPoll() {
@@ -6617,16 +6628,29 @@ def _simple_page_html() -> str:
       qqLikeGuest.hidden = true
       qqLikeAccount.hidden = true
       qqLikeLogin.hidden = false
+      const expiresInSeconds = Number(data.expires_in_seconds || 0)
+      const backendRevision = String(data.qr_revision || '').trim()
       if (data.login_state === 'finalizing') {
         qqLikeLoginStatus.textContent = '扫码已确认，正在校验 QQ 登录状态。'
       } else {
-        qqLikeLoginStatus.textContent = `等待扫码确认，二维码约 ${Number(data.expires_in_seconds || 0)} 秒后失效。`
-        if (!qqLikeQrImage.getAttribute('src')) {
+        const revisionChanged = Boolean(
+          backendRevision
+          && qqLikeQrRevision
+          && backendRevision !== qqLikeQrRevision
+        )
+        if (!qqLikeQrImage.getAttribute('src') || revisionChanged) {
           try {
-            await loadQQLikeQr()
+            await loadQQLikeQr(backendRevision)
+            qqLikeLoginStatus.textContent = revisionChanged
+              ? `二维码已更新，请扫描最新二维码。本次扫码任务剩余时间 ${expiresInSeconds} 秒。`
+              : `等待扫码确认。本次扫码任务剩余时间 ${expiresInSeconds} 秒。`
           } catch (error) {
-            qqLikeLoginStatus.textContent = `登录仍在进行，二维码暂时无法加载：${error.message}`
+            qqLikeLoginStatus.textContent = `环境已启动，正在生成二维码。本次扫码任务剩余时间 ${expiresInSeconds} 秒。`
           }
+        } else if (data.login_error) {
+          qqLikeLoginStatus.textContent = `${data.login_error}。本次扫码任务剩余时间 ${expiresInSeconds} 秒。`
+        } else {
+          qqLikeLoginStatus.textContent = `等待扫码确认。本次扫码任务剩余时间 ${expiresInSeconds} 秒。`
         }
       }
       setShareStatus(
@@ -6669,8 +6693,9 @@ def _simple_page_html() -> str:
     async function startQQLikeLogin() {
       qqLikeStartLogin.disabled = true
       setShareStatus(qqLikeGlobalStatus, '正在启动独立 QQ 登录环境。')
+      let data
       try {
-        const data = await qqLikeJsonRequest('/api/tools/qq-like/login/start', {
+        data = await qqLikeJsonRequest('/api/tools/qq-like/login/start', {
           method: 'POST',
           json: true,
           body: '{}',
@@ -6682,17 +6707,28 @@ def _simple_page_html() -> str:
           qqLikeRecoveryCode.textContent = data.recovery_code
           qqLikeRecoveryNotice.hidden = false
         }
+      } catch (error) {
+        setShareStatus(qqLikeGlobalStatus, `启动登录失败：${error.message}`, 'failed')
+        return
+      } finally {
+        qqLikeStartLogin.disabled = false
+      }
+      try {
+        await renderQQLikeLoginProgress(data)
+        setShareStatus(
+          qqLikeGlobalStatus,
+          qqLikeQrImage.getAttribute('src')
+            ? '二维码已生成，请使用手机 QQ 扫码。'
+            : '环境已启动，正在生成二维码。',
+          'success',
+        )
+      } catch (error) {
         qqLikeGuest.hidden = true
         qqLikeAccount.hidden = true
         qqLikeLogin.hidden = false
-        qqLikeLoginStatus.textContent = `等待扫码确认，二维码约 ${Number(data.expires_in_seconds || 0)} 秒后失效。`
-        await loadQQLikeQr()
-        setShareStatus(qqLikeGlobalStatus, '二维码已生成，请使用手机 QQ 扫码。', 'success')
+        qqLikeLoginStatus.textContent = '环境已启动，正在生成二维码。'
+        setShareStatus(qqLikeGlobalStatus, '环境已启动，正在生成二维码。', 'success')
         scheduleQQLikeLoginPoll()
-      } catch (error) {
-        setShareStatus(qqLikeGlobalStatus, `启动登录失败：${error.message}`, 'failed')
-      } finally {
-        qqLikeStartLogin.disabled = false
       }
     }
 
@@ -6722,6 +6758,11 @@ def _simple_page_html() -> str:
             await renderQQLikeLoginProgress(loginData)
             return
           }
+          renderQQLikeGuest(
+            loginData?.contributor?.last_error
+            || '扫码任务已结束，请点击“贡献 QQ 并获取资格”重新扫码。',
+          )
+          return
         }
         scheduleQQLikeDashboard()
       } catch (error) {
@@ -6753,9 +6794,10 @@ def _simple_page_html() -> str:
           json: true,
           body: '{}',
         })
-        await loadQQLikeQr()
-        qqLikeLoginStatus.textContent = `二维码已刷新，约 ${Number(data.expires_in_seconds || 0)} 秒后失效。`
-        scheduleQQLikeLoginPoll()
+        await renderQQLikeLoginProgress(data)
+        qqLikeLoginStatus.textContent = qqLikeQrImage.getAttribute('src')
+          ? `二维码已刷新，请扫描最新二维码。本次扫码任务剩余时间 ${Number(data.expires_in_seconds || 0)} 秒。`
+          : `环境已启动，正在生成二维码。本次扫码任务剩余时间 ${Number(data.expires_in_seconds || 0)} 秒。`
       } catch (error) {
         qqLikeLoginStatus.textContent = `刷新失败：${error.message}`
       } finally {
@@ -8904,10 +8946,19 @@ def _run_http_server(
                             headers=headers,
                         )
                         return True
+                    qr_payload, qr_revision = (
+                        qq_like_service.read_login_qr_with_revision(
+                            access_token
+                        )
+                    )
                     self._binary_response(
-                        qq_like_service.read_login_qr(access_token),
+                        qr_payload,
                         content_type="image/png",
-                        headers=headers,
+                        headers={
+                            **headers,
+                            "ETag": f'"{qr_revision}"',
+                            "X-QQ-Like-QR-Revision": qr_revision,
+                        },
                     )
                     return True
 

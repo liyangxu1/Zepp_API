@@ -51,6 +51,16 @@ class QQLikeCommunityTest(unittest.TestCase):
             page,
         )
 
+    def test_qr_revision_and_delayed_file_have_independent_ui_states(self) -> None:
+        page = app._simple_page_html()
+
+        self.assertIn("X-QQ-Like-QR-Revision", page)
+        self.assertIn("二维码已更新，请扫描最新二维码", page)
+        self.assertIn("环境已启动，正在生成二维码", page)
+        self.assertIn("本次扫码任务剩余时间", page)
+        self.assertIn("扫码任务已结束，请点击", page)
+        self.assertNotIn("二维码约 ${Number(data.expires_in_seconds", page)
+
 
 if __name__ == "__main__":
     unittest.main()

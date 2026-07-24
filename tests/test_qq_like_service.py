@@ -1,3 +1,4 @@
+import hashlib
 import tempfile
 import time
 import unittest
@@ -10,6 +11,7 @@ from qq_like.napcat import (
     NapCatProtocolError,
     NapCatRuntimeBusy,
     NapCatSession,
+    NapCatWebUIRateLimitError,
 )
 from qq_like.service import QQMutualLikeService, QQMutualLikeServiceError
 from qq_like.store import QQLikeStore, QQLikeStoreError
@@ -20,18 +22,29 @@ class FakeWebUI:
         self.runtime = runtime
 
     def request_qr_code(self):
+        self.runtime.qr_request_count += 1
+        if not self.runtime.qr_generation_delayed:
+            self.runtime.write_qr()
         return "https://txz.qq.com/p?k=test"
 
     def refresh_qr_code(self):
         self.runtime.refresh_count += 1
+        self.runtime.qr_generation += 1
         return {}
 
     def check_login_status(self):
+        self.runtime.webui_status_count += 1
+        if self.runtime.webui_status_error:
+            raise self.runtime.webui_status_error
         return {
             "isLogin": self.runtime.login_ready,
             "isOffline": not self.runtime.login_ready,
             "loginError": "",
         }
+
+    def login(self):
+        self.runtime.webui_auth_count += 1
+        return "credential"
 
 
 class FakeOneBot:
@@ -82,6 +95,13 @@ class FakeRuntime:
         self.login_error = ""
         self.send_error = ""
         self.refresh_count = 0
+        self.qr_request_count = 0
+        self.qr_generation = 1
+        self.qr_generation_delayed = False
+        self.webui_auth_count = 0
+        self.webui_status_count = 0
+        self.webui_status_error = None
+        self.webui = FakeWebUI(self)
         self.likes = []
         self.send_attempts = 0
         self.deleted = []
@@ -89,13 +109,11 @@ class FakeRuntime:
         self.start_count = 0
         self.start_error = ""
         self.managed = []
+        self.delete_running_failures = 0
 
     def _session(self, contributor_id):
         root = self.root / contributor_id
         (root / "cache").mkdir(parents=True, exist_ok=True)
-        (root / "cache" / "qrcode.png").write_bytes(
-            b"\x89PNG\r\n\x1a\nfake"
-        )
         return NapCatSession(
             contributor_id=contributor_id,
             root=root,
@@ -126,10 +144,14 @@ class FakeRuntime:
         return 0
 
     def delete_session(self, contributor_id):
+        if self.delete_running_failures > 0:
+            self.delete_running_failures -= 1
+            raise NapCatError("贡献账号仍在运行，不能删除登录信息")
         self.deleted.append(contributor_id)
 
     def wait_for_webui(self, session, *, attempts=30, interval_seconds=1):
-        return FakeWebUI(self)
+        self.webui_auth_count += 1
+        return self.webui
 
     def prepare_session(self, contributor_id):
         return self._session(contributor_id)
@@ -139,6 +161,40 @@ class FakeRuntime:
 
     def read_qr_code_png(self, session):
         return session.qr_code_path.read_bytes()
+
+    def read_qr_code_png_with_revision(self, session):
+        try:
+            payload = session.qr_code_path.read_bytes()
+        except OSError as exc:
+            raise NapCatError("登录二维码尚未生成") from exc
+        return payload, hashlib.sha256(payload).hexdigest()[:16]
+
+    def clear_qr_code(self, session):
+        session.qr_code_path.unlink(missing_ok=True)
+
+    def wait_for_qr_code(
+        self,
+        session,
+        *,
+        previous_revision="",
+        attempts=30,
+        interval_seconds=0.1,
+    ):
+        if not session.qr_code_path.exists():
+            raise NapCatError("登录二维码尚未生成")
+        payload, revision = self.read_qr_code_png_with_revision(session)
+        if previous_revision and revision == previous_revision:
+            raise NapCatError("新的登录二维码尚未生成")
+        return payload, revision
+
+    def write_qr(self):
+        if not self.active_contributor:
+            return
+        session = self._session(self.active_contributor)
+        session.qr_code_path.write_bytes(
+            b"\x89PNG\r\n\x1a\n"
+            + f"fake-{self.qr_generation}".encode("ascii")
+        )
 
     def onebot_client(self, session):
         return FakeOneBot(self, session)
@@ -170,6 +226,10 @@ class QQMutualLikeServiceTest(unittest.TestCase):
         self.runtime.record_login(created["contributor_id"], qq_number)
         return created
 
+    def advance_login(self, contributor_id=""):
+        with self.service._login_lock:
+            return self.service._advance_active_login_locked(contributor_id)
+
     def test_new_contribution_qr_and_login_activation(self):
         started = self.service.start_login(
             remote_addr="127.0.0.1",
@@ -184,6 +244,7 @@ class QQMutualLikeServiceTest(unittest.TestCase):
         )
 
         self.runtime.login_ready = True
+        self.advance_login(contributor_id)
         completed = self.service.poll_login(access_token)
         self.assertEqual("active", completed["login_state"])
         self.assertEqual("贡献账号在线", completed["dashboard"]["contributor"]["status_label"])
@@ -197,6 +258,106 @@ class QQMutualLikeServiceTest(unittest.TestCase):
         self.service.start_login(remote_addr="first", user_agent="test")
         with self.assertRaisesRegex(QQMutualLikeServiceError, "另一个 QQ"):
             self.service.start_login(remote_addr="second", user_agent="test")
+
+    def test_status_reads_do_not_repeat_webui_authentication(self):
+        started = self.service.start_login(
+            remote_addr="127.0.0.1",
+            user_agent="test",
+        )
+
+        for _ in range(100):
+            status = self.service.poll_login(started["access_token"])
+            self.assertEqual("waiting_scan", status["login_state"])
+
+        self.assertEqual(1, self.runtime.webui_auth_count)
+        self.assertEqual(0, self.runtime.webui_status_count)
+        self.advance_login(started["contributor"]["contributor_id"])
+        self.assertEqual(1, self.runtime.webui_status_count)
+        self.assertEqual(1, self.runtime.webui_auth_count)
+
+    def test_webui_rate_limit_waits_without_authentication_storm(self):
+        started = self.service.start_login(
+            remote_addr="127.0.0.1",
+            user_agent="test",
+        )
+        self.runtime.webui_status_error = NapCatWebUIRateLimitError(
+            "login rate limit"
+        )
+
+        self.advance_login(started["contributor"]["contributor_id"])
+        for _ in range(20):
+            self.advance_login(started["contributor"]["contributor_id"])
+
+        status = self.service.poll_login(started["access_token"])
+        self.assertEqual("waiting_scan", status["login_state"])
+        self.assertIn("一分钟后", status["login_error"])
+        self.assertEqual(1, self.runtime.webui_status_count)
+        self.assertEqual(1, self.runtime.webui_auth_count)
+
+    def test_transient_webui_error_does_not_claim_scan_confirmed(self):
+        started = self.service.start_login(
+            remote_addr="127.0.0.1",
+            user_agent="test",
+        )
+        self.runtime.webui_status_error = NapCatProtocolError("连接被重置")
+
+        self.advance_login(started["contributor"]["contributor_id"])
+
+        status = self.service.poll_login(started["access_token"])
+        self.assertEqual("waiting_scan", status["login_state"])
+        self.assertIn("连接被重置", status["login_error"])
+
+    def test_delayed_qr_file_keeps_started_login_and_later_updates_revision(self):
+        self.runtime.qr_generation_delayed = True
+        started = self.service.start_login(
+            remote_addr="127.0.0.1",
+            user_agent="test",
+        )
+        contributor_id = started["contributor"]["contributor_id"]
+
+        self.assertEqual("waiting_scan", started["login_state"])
+        self.assertEqual("", started["qr_revision"])
+        self.assertIn("正在生成二维码", started["login_error"])
+
+        self.runtime.qr_generation_delayed = False
+        self.runtime.write_qr()
+        self.advance_login(contributor_id)
+
+        updated = self.service.poll_login(started["access_token"])
+        self.assertTrue(updated["qr_revision"])
+        self.assertEqual("", updated["login_error"])
+
+    def test_automatic_qr_replacement_changes_revision_without_extending_task(self):
+        started = self.service.start_login(
+            remote_addr="127.0.0.1",
+            user_agent="test",
+        )
+        contributor_id = started["contributor"]["contributor_id"]
+        initial_revision = started["qr_revision"]
+        initial_expiry = self.service._active_login.expires_at
+
+        self.runtime.qr_generation += 1
+        self.runtime.write_qr()
+        self.advance_login(contributor_id)
+
+        updated = self.service.poll_login(started["access_token"])
+        self.assertNotEqual(initial_revision, updated["qr_revision"])
+        self.assertEqual(initial_expiry, self.service._active_login.expires_at)
+
+    def test_manual_qr_refresh_reuses_webui_and_resets_task_deadline(self):
+        started = self.service.start_login(
+            remote_addr="127.0.0.1",
+            user_agent="test",
+        )
+        initial_revision = started["qr_revision"]
+        self.service._active_login.expires_at -= 120
+
+        refreshed = self.service.refresh_login_qr(started["access_token"])
+
+        self.assertNotEqual(initial_revision, refreshed["qr_revision"])
+        self.assertGreaterEqual(refreshed["expires_in_seconds"], 299)
+        self.assertEqual(1, self.runtime.webui_auth_count)
+        self.assertEqual(1, self.runtime.refresh_count)
 
     def test_worker_confirms_login_without_browser_polling(self):
         self.service.worker_interval_seconds = 0.2
@@ -230,11 +391,13 @@ class QQMutualLikeServiceTest(unittest.TestCase):
         self.runtime.login_ready = True
         self.runtime.onebot_ready = False
 
+        self.advance_login(started["contributor"]["contributor_id"])
         pending = self.service.poll_login(started["access_token"])
         self.assertEqual("finalizing", pending["login_state"])
         self.assertNotEqual("", self.runtime.active_contributor)
 
         self.runtime.onebot_ready = True
+        self.advance_login(started["contributor"]["contributor_id"])
         completed = self.service.poll_login(started["access_token"])
         self.assertEqual("active", completed["login_state"])
         self.assertEqual("", self.runtime.active_contributor)
@@ -297,6 +460,34 @@ class QQMutualLikeServiceTest(unittest.TestCase):
         self.assertIn("重新扫码", contributor["last_error"])
         self.assertIsNone(
             self.store.get_runtime_lease("qq-like-napcat-runtime")
+        )
+
+    def test_orphaned_pending_login_keeps_recovery_ownership(self):
+        created = self.store.create_contributor()
+        contributor_id = created["contributor_id"]
+
+        marked = self.service._mark_orphaned_pending_logins()
+
+        contributor = self.store.get_contributor(contributor_id)
+        self.assertEqual(1, marked)
+        self.assertEqual("pending_login", contributor["status"])
+        self.assertIn("重新扫码", contributor["last_error"])
+        recovered = self.store.recover_access(
+            contributor_id,
+            created["recovery_code"],
+        )
+        self.assertTrue(recovered)
+
+    def test_session_delete_retries_container_auto_remove_race(self):
+        created = self.store.create_contributor()
+        self.runtime.delete_running_failures = 2
+
+        self.service._delete_session_safely(created["contributor_id"])
+
+        self.assertEqual(0, self.runtime.delete_running_failures)
+        self.assertEqual(
+            [created["contributor_id"]],
+            self.runtime.deleted,
         )
 
     def test_contributor_request_uses_another_account_and_ten_likes(self):
@@ -441,10 +632,14 @@ class QQMutualLikeServiceTest(unittest.TestCase):
             started["contributor"]["contributor_id"],
         )
         self.assertEqual(
-            "revoked",
+            "pending_login",
             store.get_contributor(stale["contributor_id"])["status"],
         )
-        self.assertIn(stale["contributor_id"], runtime.deleted)
+        self.assertIn(
+            "重新扫码",
+            store.get_contributor(stale["contributor_id"])["last_error"],
+        )
+        self.assertNotIn(stale["contributor_id"], runtime.deleted)
 
     def test_recovery_rate_limit_is_scoped_by_remote_address(self):
         created = self.store.create_contributor()
