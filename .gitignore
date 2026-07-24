@@ -6,3 +6,7 @@ venv/
 *.sqlite
 *.sqlite3
 device_share_uploads/
+baidu_share_downloads/
+baidu_speed_tests/
+.baidupcs/
+bin/BaiduPCS-Go
