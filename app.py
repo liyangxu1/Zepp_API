@@ -4131,6 +4131,342 @@ def _simple_page_html() -> str:
       scroll-margin-top: 78px;
     }
 
+    .qq-like-workspace {
+      grid-template-columns: minmax(0, 1fr);
+      scroll-margin-top: 78px;
+      min-width: 0;
+      width: 100%;
+    }
+
+    .qq-like-shell {
+      width: 100%;
+      max-width: 1040px;
+      min-width: 0;
+      display: grid;
+      gap: 14px;
+    }
+
+    .qq-like-shell > * {
+      min-width: 0;
+      max-width: 100%;
+    }
+
+    .qq-like-titlebar {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+    }
+
+    .qq-like-titlebar p {
+      margin-bottom: 0;
+    }
+
+    .qq-like-account {
+      display: grid;
+      gap: 14px;
+      border: 1px solid #99f6e4;
+      border-radius: 8px;
+      background: #f8fffd;
+      padding: 14px 16px;
+    }
+
+    .qq-like-account-head,
+    .qq-like-record-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .qq-like-account-state {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      color: var(--success);
+      font-weight: 900;
+    }
+
+    .qq-like-account-state::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: currentColor;
+      box-shadow: 0 0 0 4px rgba(15, 143, 95, 0.1);
+    }
+
+    .qq-like-account-state.pending {
+      color: #b45309;
+    }
+
+    .qq-like-account-state.offline {
+      color: var(--danger);
+    }
+
+    .qq-like-account-number {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      flex-wrap: wrap;
+      font-size: 20px;
+      font-weight: 900;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .qq-like-account-number span {
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .qq-like-link {
+      border: 0;
+      background: transparent;
+      color: var(--primary);
+      padding: 0;
+      min-height: auto;
+      font-weight: 850;
+      cursor: pointer;
+    }
+
+    .qq-like-quota-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      border-top: 1px solid var(--line);
+      padding-top: 12px;
+    }
+
+    .qq-like-quota {
+      min-width: 0;
+      padding: 2px 16px;
+      text-align: center;
+      border-right: 1px solid var(--line);
+    }
+
+    .qq-like-quota:first-child {
+      padding-left: 0;
+    }
+
+    .qq-like-quota:last-child {
+      padding-right: 0;
+      border-right: 0;
+    }
+
+    .qq-like-quota span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .qq-like-quota strong {
+      display: block;
+      margin-top: 5px;
+      color: var(--primary);
+      font-size: 22px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .qq-like-form-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 220px;
+      gap: 12px;
+      align-items: end;
+    }
+
+    .qq-like-form-grid .form-row {
+      margin: 0;
+    }
+
+    .qq-like-form-grid .primary {
+      width: 100%;
+      min-height: 42px;
+    }
+
+    .qq-like-task {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      margin-top: 8px;
+    }
+
+    .qq-like-task-step {
+      position: relative;
+      min-width: 0;
+      padding: 0 8px;
+      text-align: center;
+      color: var(--muted);
+    }
+
+    .qq-like-task-step::before {
+      content: "";
+      position: absolute;
+      top: 15px;
+      left: 0;
+      width: 50%;
+      height: 2px;
+      background: var(--line);
+      transform: translateX(-50%);
+    }
+
+    .qq-like-task-step:first-child::before {
+      display: none;
+    }
+
+    .qq-like-task-step.done::before,
+    .qq-like-task-step.active::before {
+      background: #2dd4bf;
+    }
+
+    .qq-like-task-node {
+      position: relative;
+      z-index: 1;
+      width: 30px;
+      height: 30px;
+      margin: 0 auto 7px;
+      display: grid;
+      place-items: center;
+      border: 1px solid #cbd5e1;
+      border-radius: 50%;
+      background: #fff;
+      color: var(--muted);
+      font-weight: 900;
+    }
+
+    .qq-like-task-step.done .qq-like-task-node,
+    .qq-like-task-step.active .qq-like-task-node {
+      border-color: var(--primary);
+      background: var(--primary);
+      color: #fff;
+    }
+
+    .qq-like-task-step strong {
+      display: block;
+      color: var(--text);
+      font-size: 13px;
+    }
+
+    .qq-like-task-step.active strong {
+      color: var(--primary);
+    }
+
+    .qq-like-task-step span {
+      display: block;
+      margin-top: 3px;
+      font-size: 11px;
+      line-height: 1.4;
+    }
+
+    .qq-like-table-wrap {
+      min-width: 0;
+      max-width: 100%;
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+
+    .qq-like-table {
+      width: 100%;
+      min-width: 640px;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    .qq-like-table th,
+    .qq-like-table td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      white-space: nowrap;
+    }
+
+    .qq-like-table th {
+      color: var(--muted);
+      background: #f8fafc;
+      font-size: 12px;
+    }
+
+    .qq-like-table tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .qq-like-login-grid {
+      display: grid;
+      grid-template-columns: 220px minmax(0, 1fr);
+      gap: 16px;
+      align-items: center;
+      margin-top: 12px;
+    }
+
+    .qq-like-qr {
+      width: 220px;
+      height: 220px;
+      object-fit: contain;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 8px;
+    }
+
+    .qq-like-login-copy {
+      color: var(--muted);
+      line-height: 1.7;
+    }
+
+    .qq-like-recovery {
+      margin-top: 12px;
+      border: 1px solid #fde68a;
+      border-radius: 8px;
+      background: #fffbeb;
+      padding: 12px;
+      color: #92400e;
+      line-height: 1.6;
+    }
+
+    .qq-like-recovery code {
+      display: block;
+      margin: 8px 0;
+      color: #78350f;
+      font-size: 18px;
+      font-weight: 900;
+      letter-spacing: 0.06em;
+      overflow-wrap: anywhere;
+    }
+
+    .qq-like-manage {
+      margin-top: 12px;
+      border-top: 1px solid var(--line);
+      padding-top: 12px;
+    }
+
+    .qq-like-manage summary {
+      cursor: pointer;
+      color: var(--primary);
+      font-weight: 850;
+    }
+
+    .qq-like-manage-body {
+      display: grid;
+      gap: 12px;
+      margin-top: 12px;
+    }
+
+    .qq-like-safety {
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+      border: 1px solid #a7f3d0;
+      border-radius: 8px;
+      background: #f0fdf4;
+      padding: 12px 14px;
+      color: #166534;
+      line-height: 1.6;
+      font-size: 13px;
+    }
+
+    .qq-like-safety strong {
+      flex: none;
+    }
+
     .baidu-share-form textarea {
       min-height: 132px;
       resize: vertical;
@@ -4885,6 +5221,47 @@ def _simple_page_html() -> str:
         max-height: 220px;
         justify-self: start;
       }
+      .qq-like-titlebar,
+      .qq-like-account-head,
+      .qq-like-record-head {
+        align-items: flex-start;
+      }
+      .qq-like-form-grid,
+      .qq-like-login-grid {
+        grid-template-columns: 1fr;
+      }
+      .qq-like-qr {
+        width: min(100%, 220px);
+        height: auto;
+        aspect-ratio: 1 / 1;
+        justify-self: center;
+      }
+      .qq-like-task {
+        grid-template-columns: 1fr;
+        gap: 10px;
+      }
+      .qq-like-task-step {
+        display: grid;
+        grid-template-columns: 30px minmax(0, 1fr);
+        grid-template-rows: auto auto;
+        column-gap: 10px;
+        text-align: left;
+        padding: 0;
+      }
+      .qq-like-task-step::before {
+        top: -10px;
+        left: 14px;
+        width: 2px;
+        height: 10px;
+        transform: none;
+      }
+      .qq-like-task-node {
+        grid-row: 1 / span 2;
+        margin: 0;
+      }
+      .qq-like-task-step span {
+        margin-top: 1px;
+      }
     }
   </style>
 </head>
@@ -4899,9 +5276,10 @@ def _simple_page_html() -> str:
         </div>
       </div>
       <div class="side-section-title">工具分类</div>
-      <button class="category active" data-category="all"><span>全部工具</span><span class="category-count">9</span></button>
+      <button class="category active" data-category="all"><span>全部工具</span><span class="category-count">10</span></button>
       <button class="category" data-category="life"><span>生活工具</span><span class="category-count">1</span></button>
       <button class="category" data-category="file"><span>文件工具</span><span class="category-count">1</span></button>
+      <button class="category" data-category="qq"><span>QQ 工具</span><span class="category-count">1</span></button>
       <button class="category" data-category="promotion"><span>推广工具</span><span class="category-count">1</span></button>
       <button class="category" data-category="dev"><span>开发工具</span><span class="category-count">3</span></button>
       <button class="category" data-category="text"><span>文本工具</span><span class="category-count">1</span></button>
@@ -4910,6 +5288,7 @@ def _simple_page_html() -> str:
       <div class="side-section-title">当前工具</div>
       <button class="category active" data-tool-shortcut="zepp-step"><span>微信步数修改</span><span class="category-count">可用</span></button>
       <button class="category" data-tool-shortcut="baidu-share"><span>网盘中转下载</span><span class="category-count">记录中</span></button>
+      <button class="category" data-tool-shortcut="qq-like"><span>QQ 互赞</span><span class="category-count">可用</span></button>
     </aside>
 
     <main class="main">
@@ -4929,7 +5308,7 @@ def _simple_page_html() -> str:
             <p class="section-desc">先把已跑通的微信步数修改放进工具站框架，也支持跳转到独立工具页面和人工对接服务。</p>
           </div>
           <div class="stats">
-            <div class="stat"><strong>3</strong><span>自助工具</span></div>
+            <div class="stat"><strong>4</strong><span>自助工具</span></div>
             <div class="stat"><strong>1</strong><span>人工对接</span></div>
             <div class="stat"><strong>5</strong><span>预留位置</span></div>
           </div>
@@ -5192,6 +5571,169 @@ def _simple_page_html() -> str:
           </div>
         </section>
 
+        <section class="workspace qq-like-workspace tool-workspace" id="qqLikePanel" data-tool-workspace="qq-like">
+          <div class="qq-like-shell">
+            <section class="panel">
+              <div class="qq-like-titlebar">
+                <div>
+                  <h2>QQ 互赞</h2>
+                  <p>贡献一个可用 QQ 登录态，即可获得每日 1 次互赞资格；每次固定执行 10 次点赞。</p>
+                </div>
+                <button class="qq-like-link" type="button" id="qqLikeReload">刷新状态</button>
+              </div>
+
+              <div id="qqLikeGuest">
+                <div class="tool-notice">只有贡献 QQ 登录态的普通用户才能发起互赞。系统只调用 OneBot 点赞接口，不读取聊天记录、联系人或群消息。</div>
+                <div class="actions">
+                  <button class="primary" type="button" id="qqLikeStartLogin">贡献 QQ 并获取资格</button>
+                  <button class="ghost" type="button" id="qqLikeShowRecovery">已有贡献账号，找回管理权</button>
+                </div>
+              </div>
+
+              <div id="qqLikeLogin" hidden>
+                <div class="qq-like-login-grid">
+                  <img class="qq-like-qr" id="qqLikeQrImage" alt="QQ 登录二维码" />
+                  <div class="qq-like-login-copy">
+                    <strong>使用手机 QQ 扫码登录</strong>
+                    <p id="qqLikeLoginStatus">二维码准备中，请稍候。</p>
+                    <div class="actions">
+                      <button class="ghost" type="button" id="qqLikeRefreshQr">刷新二维码</button>
+                      <button class="ghost" type="button" id="qqLikeCancelLocal">稍后再扫</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="qq-like-recovery" id="qqLikeRecoveryNotice" hidden>
+                <strong>请立即保存恢复码</strong>
+                <code id="qqLikeRecoveryCode"></code>
+                恢复码只在首次创建时展示一次。它可以在更换浏览器后找回账号管理权，请勿发给他人。
+              </div>
+
+              <div class="qq-like-account" id="qqLikeAccount" hidden>
+                <div class="qq-like-account-head">
+                  <div>
+                    <div class="qq-like-account-state" id="qqLikeAccountState">贡献账号在线</div>
+                    <div class="qq-like-account-number">
+                      <strong id="qqLikeAccountNumber">未登录</strong>
+                      <span id="qqLikeAccountHealth">等待状态同步</span>
+                    </div>
+                  </div>
+                  <button class="qq-like-link" type="button" id="qqLikeManageToggle">管理账号</button>
+                </div>
+                <div class="qq-like-quota-grid">
+                  <div class="qq-like-quota">
+                    <span>今日名额</span>
+                    <strong id="qqLikeDailyTotal">1 个</strong>
+                  </div>
+                  <div class="qq-like-quota">
+                    <span>剩余名额</span>
+                    <strong id="qqLikeDailyRemaining">0 个</strong>
+                  </div>
+                  <div class="qq-like-quota">
+                    <span>排队任务</span>
+                    <strong id="qqLikeQueuedRequests">0 个</strong>
+                  </div>
+                </div>
+              </div>
+
+              <details class="qq-like-manage" id="qqLikeManage">
+                <summary>账号管理与凭证恢复</summary>
+                <div class="qq-like-manage-body">
+                  <form id="qqLikeRecoveryForm">
+                    <div class="form-row">
+                      <label>贡献账号 ID</label>
+                      <input id="qqLikeContributorId" name="contributor_id" type="text" maxlength="40" autocomplete="off" placeholder="qlc_..." />
+                    </div>
+                    <div class="form-row">
+                      <label>恢复码</label>
+                      <input id="qqLikeRecoveryInput" name="recovery_code" type="text" maxlength="20" autocomplete="off" placeholder="XXXX-XXXX-XXXX" />
+                    </div>
+                    <div class="actions">
+                      <button class="primary" type="submit" id="qqLikeRecover">找回管理权</button>
+                      <button class="ghost" type="button" id="qqLikeForgetLocal">仅清除本机凭证</button>
+                      <button class="ghost" type="button" id="qqLikeRevoke">停止贡献并删除登录信息</button>
+                    </div>
+                  </form>
+                </div>
+              </details>
+              <div class="share-status" id="qqLikeGlobalStatus">正在检查本机是否保存了贡献凭证。</div>
+            </section>
+
+            <section class="panel">
+              <h2>发起今日互赞</h2>
+              <p>系统会自动选择另一台当天仍有额度的贡献账号执行，同一来源账号每天只执行一次互赞任务。</p>
+              <form id="qqLikeRequestForm">
+                <div class="qq-like-form-grid">
+                  <div class="form-row">
+                    <label>目标 QQ 号</label>
+                    <input id="qqLikeTarget" name="target_qq" type="text" inputmode="numeric" pattern="[1-9][0-9]{4,11}" maxlength="12" autocomplete="off" placeholder="请输入要点赞的 QQ 号" />
+                  </div>
+                  <button class="primary" type="submit" id="qqLikeSubmit" disabled>加入互赞队列</button>
+                </div>
+                <div class="field-hint">固定执行 10 次点赞；任务结果不明确时不会自动重复发送，避免对同一目标重复点赞。</div>
+              </form>
+            </section>
+
+            <section class="panel">
+              <h2>当前任务状态</h2>
+              <p id="qqLikeTaskSummary">尚未提交今日互赞任务。</p>
+              <div class="qq-like-task" id="qqLikeTaskSteps">
+                <div class="qq-like-task-step" data-qq-like-step="submitted">
+                  <div class="qq-like-task-node">1</div>
+                  <strong>已提交</strong>
+                  <span>—</span>
+                </div>
+                <div class="qq-like-task-step" data-qq-like-step="assigned">
+                  <div class="qq-like-task-node">2</div>
+                  <strong>等待可用账号</strong>
+                  <span>—</span>
+                </div>
+                <div class="qq-like-task-step" data-qq-like-step="running">
+                  <div class="qq-like-task-node">3</div>
+                  <strong>执行点赞</strong>
+                  <span>—</span>
+                </div>
+                <div class="qq-like-task-step" data-qq-like-step="finished">
+                  <div class="qq-like-task-node">4</div>
+                  <strong>完成</strong>
+                  <span>—</span>
+                </div>
+              </div>
+            </section>
+
+            <section class="panel">
+              <div class="qq-like-record-head">
+                <div>
+                  <h2>今日记录</h2>
+                  <p>只展示当前贡献账号发起的任务，来源 QQ 会脱敏。</p>
+                </div>
+              </div>
+              <div class="qq-like-table-wrap">
+                <table class="qq-like-table">
+                  <thead>
+                    <tr>
+                      <th>目标 QQ</th>
+                      <th>来源账号</th>
+                      <th>次数</th>
+                      <th>状态</th>
+                      <th>时间</th>
+                    </tr>
+                  </thead>
+                  <tbody id="qqLikeRecords">
+                    <tr><td colspan="5">暂无互赞记录</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </section>
+
+            <div class="qq-like-safety">
+              <strong>安全说明</strong>
+              <span>扫码贡献即表示允许系统仅使用该登录态执行 QQ 点赞。服务不会接入消息事件，也不会读取聊天、联系人或群数据；可随时在账号管理中停止贡献并删除本工具保存的登录信息。</span>
+            </div>
+          </div>
+        </section>
+
         <section class="workspace tool-workspace" id="reservedToolPanel" data-tool-workspace="reserved">
           <div class="panel">
             <h2 id="reservedToolTitle">工具详情</h2>
@@ -5220,6 +5762,7 @@ def _simple_page_html() -> str:
                 <select name="tool_id">
                   <option value="zepp-step">微信步数修改</option>
                   <option value="baidu-share">百度网盘中转下载</option>
+                  <option value="qq-like">QQ 互赞</option>
                   <option value="douyin-growth">抖音点赞涨粉</option>
                   <option value="other">其他工具 / 新功能建议</option>
                 </select>
@@ -5293,6 +5836,15 @@ def _simple_page_html() -> str:
         badge: '队列下载',
         purpose: '分享链接解析、自动转存、服务器 ZIP 下载',
         desc: '粘贴单个百度网盘分享文本，自动提取链接和提取码，完成后打包成一个 ZIP 下载。',
+        active: true,
+      },
+      {
+        id: 'qq-like',
+        category: 'qq',
+        title: 'QQ 互赞',
+        badge: '可用',
+        purpose: '贡献一个 QQ，获得每日互赞资格',
+        desc: '使用独立 QQ 登录态互助点赞；普通用户需先贡献账号，每次固定执行 10 次点赞。',
         active: true,
       },
       {
@@ -5400,6 +5952,40 @@ def _simple_page_html() -> str:
     const baiduParsePreview = document.getElementById('baiduParsePreview')
     const baiduPathPreview = document.getElementById('baiduPathPreview')
     const baiduJobsList = document.getElementById('baiduJobsList')
+    const qqLikePanel = document.getElementById('qqLikePanel')
+    const qqLikeGuest = document.getElementById('qqLikeGuest')
+    const qqLikeLogin = document.getElementById('qqLikeLogin')
+    const qqLikeAccount = document.getElementById('qqLikeAccount')
+    const qqLikeStartLogin = document.getElementById('qqLikeStartLogin')
+    const qqLikeShowRecovery = document.getElementById('qqLikeShowRecovery')
+    const qqLikeReload = document.getElementById('qqLikeReload')
+    const qqLikeQrImage = document.getElementById('qqLikeQrImage')
+    const qqLikeRefreshQr = document.getElementById('qqLikeRefreshQr')
+    const qqLikeCancelLocal = document.getElementById('qqLikeCancelLocal')
+    const qqLikeLoginStatus = document.getElementById('qqLikeLoginStatus')
+    const qqLikeRecoveryNotice = document.getElementById('qqLikeRecoveryNotice')
+    const qqLikeRecoveryCode = document.getElementById('qqLikeRecoveryCode')
+    const qqLikeAccountState = document.getElementById('qqLikeAccountState')
+    const qqLikeAccountNumber = document.getElementById('qqLikeAccountNumber')
+    const qqLikeAccountHealth = document.getElementById('qqLikeAccountHealth')
+    const qqLikeDailyTotal = document.getElementById('qqLikeDailyTotal')
+    const qqLikeDailyRemaining = document.getElementById('qqLikeDailyRemaining')
+    const qqLikeQueuedRequests = document.getElementById('qqLikeQueuedRequests')
+    const qqLikeManageToggle = document.getElementById('qqLikeManageToggle')
+    const qqLikeManage = document.getElementById('qqLikeManage')
+    const qqLikeRecoveryForm = document.getElementById('qqLikeRecoveryForm')
+    const qqLikeContributorId = document.getElementById('qqLikeContributorId')
+    const qqLikeRecoveryInput = document.getElementById('qqLikeRecoveryInput')
+    const qqLikeRecover = document.getElementById('qqLikeRecover')
+    const qqLikeForgetLocal = document.getElementById('qqLikeForgetLocal')
+    const qqLikeRevoke = document.getElementById('qqLikeRevoke')
+    const qqLikeGlobalStatus = document.getElementById('qqLikeGlobalStatus')
+    const qqLikeRequestForm = document.getElementById('qqLikeRequestForm')
+    const qqLikeTarget = document.getElementById('qqLikeTarget')
+    const qqLikeSubmit = document.getElementById('qqLikeSubmit')
+    const qqLikeTaskSummary = document.getElementById('qqLikeTaskSummary')
+    const qqLikeTaskSteps = document.querySelectorAll('[data-qq-like-step]')
+    const qqLikeRecords = document.getElementById('qqLikeRecords')
     const toolWorkspaces = document.querySelectorAll('[data-tool-workspace]')
     const zeppStepPanel = document.getElementById('zeppStepPanel')
     const reservedToolPanel = document.getElementById('reservedToolPanel')
@@ -5426,6 +6012,11 @@ def _simple_page_html() -> str:
     let sharedCanSync = false
     let qrConfirmTimer = null
     let baiduParseTimer = null
+    let qqLikeAccessToken = ''
+    let qqLikeLoginTimer = null
+    let qqLikeDashboardTimer = null
+    let qqLikeQrObjectUrl = ''
+    let qqLikeDashboardData = null
 
     function escapeHtml(value) {
       return String(value ?? '')
@@ -5545,7 +6136,10 @@ def _simple_page_html() -> str:
     }
 
     function setActiveTool(toolId, scroll = true) {
-      const workspaceId = toolId === 'baidu-share' ? 'baidu-share' : toolId === 'zepp-step' ? 'zepp-step' : 'reserved'
+      if (toolId !== 'qq-like') {
+        stopQQLikePolling()
+      }
+      const workspaceId = ['zepp-step', 'baidu-share', 'qq-like'].includes(toolId) ? toolId : 'reserved'
       currentToolId = toolId
       let activePanel = null
       toolWorkspaces.forEach((panel) => {
@@ -5604,6 +6198,443 @@ def _simple_page_html() -> str:
       setActiveTool('baidu-share')
       loadBaiduJobs()
     }
+
+    function showQQLikePanel() {
+      setActiveTool('qq-like')
+      loadQQLikeDashboard()
+    }
+
+    const qqLikeAccessTokenKey = 'qqLikeAccessToken:v1'
+    const qqLikeContributorIdKey = 'qqLikeContributorId:v1'
+
+    function readQQLikeLocalValue(key) {
+      try {
+        return window.localStorage.getItem(key) || ''
+      } catch {
+        return ''
+      }
+    }
+
+    function writeQQLikeLocalValue(key, value) {
+      try {
+        if (value) {
+          window.localStorage.setItem(key, value)
+        } else {
+          window.localStorage.removeItem(key)
+        }
+      } catch {}
+    }
+
+    function setQQLikeAccess(accessToken, contributorId = '') {
+      qqLikeAccessToken = String(accessToken || '').trim()
+      writeQQLikeLocalValue(qqLikeAccessTokenKey, qqLikeAccessToken)
+      if (contributorId) {
+        writeQQLikeLocalValue(qqLikeContributorIdKey, contributorId)
+        qqLikeContributorId.value = contributorId
+      }
+    }
+
+    function clearQQLikeQrImage() {
+      if (qqLikeQrObjectUrl) {
+        URL.revokeObjectURL(qqLikeQrObjectUrl)
+        qqLikeQrObjectUrl = ''
+      }
+      qqLikeQrImage.removeAttribute('src')
+    }
+
+    function stopQQLikePolling() {
+      if (qqLikeLoginTimer) {
+        window.clearTimeout(qqLikeLoginTimer)
+        qqLikeLoginTimer = null
+      }
+      if (qqLikeDashboardTimer) {
+        window.clearTimeout(qqLikeDashboardTimer)
+        qqLikeDashboardTimer = null
+      }
+    }
+
+    function scheduleQQLikeDashboard() {
+      if (currentToolId !== 'qq-like' || !qqLikeAccessToken) return
+      if (qqLikeDashboardTimer) window.clearTimeout(qqLikeDashboardTimer)
+      qqLikeDashboardTimer = window.setTimeout(loadQQLikeDashboard, 8000)
+    }
+
+    function qqLikeRequestHeaders(json = false) {
+      const headers = {}
+      if (json) headers['Content-Type'] = 'application/json'
+      if (qqLikeAccessToken) headers['X-QQ-Like-Token'] = qqLikeAccessToken
+      return headers
+    }
+
+    async function qqLikeJsonRequest(path, options = {}) {
+      const requestOptions = {
+        cache: 'no-store',
+        ...options,
+        headers: {
+          ...qqLikeRequestHeaders(Boolean(options.json)),
+          ...(options.headers || {}),
+        },
+      }
+      delete requestOptions.json
+      const response = await fetch(path, requestOptions)
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok || data.status === 'failed') {
+        const error = new Error(data.error || `请求失败（HTTP ${response.status}）`)
+        error.status = response.status
+        throw error
+      }
+      return data
+    }
+
+    function renderQQLikeGuest(message = '') {
+      qqLikeDashboardData = null
+      qqLikeGuest.hidden = false
+      qqLikeLogin.hidden = true
+      qqLikeAccount.hidden = true
+      qqLikeSubmit.disabled = true
+      renderQQLikeRecords([])
+      renderQQLikeTask(null)
+      if (message) {
+        setShareStatus(qqLikeGlobalStatus, message, 'failed')
+      } else {
+        setShareStatus(qqLikeGlobalStatus, '尚未绑定贡献账号。')
+      }
+    }
+
+    function qqlikeStatusClass(status) {
+      if (status === 'active') return ''
+      if (status === 'pending_login') return 'pending'
+      return 'offline'
+    }
+
+    function renderQQLikeDashboard(data) {
+      const contributor = data?.contributor || {}
+      const quota = data?.quota || {}
+      const requests = Array.isArray(data?.requests) ? data.requests : []
+      qqLikeDashboardData = data
+      qqLikeGuest.hidden = true
+      qqLikeLogin.hidden = true
+      qqLikeAccount.hidden = false
+      qqLikeAccountState.className = `qq-like-account-state ${qqlikeStatusClass(contributor.status)}`.trim()
+      qqLikeAccountState.textContent = contributor.status_label || '贡献账号状态未知'
+      qqLikeAccountNumber.textContent = contributor.qq_masked || '未登录'
+      qqLikeAccountHealth.textContent = contributor.last_health_at
+        ? `最近检查 ${contributor.last_health_at}`
+        : (contributor.last_error || '等待首次状态检查')
+      const dailyRemaining = Number(quota.daily_remaining || 0)
+      qqLikeDailyTotal.textContent = `${Number(quota.daily_total || 1)} 个`
+      qqLikeDailyRemaining.textContent = `${dailyRemaining} 个`
+      qqLikeQueuedRequests.textContent = `${Number(quota.queued_requests || 0)} 个`
+      qqLikeSubmit.disabled = contributor.status !== 'active' || dailyRemaining < 1
+      const contributorId = contributor.contributor_id || ''
+      if (contributorId) {
+        writeQQLikeLocalValue(qqLikeContributorIdKey, contributorId)
+        qqLikeContributorId.value = contributorId
+      }
+      renderQQLikeRecords(requests)
+      renderQQLikeTask(requests[0] || null)
+      const message = contributor.status === 'active'
+        ? (
+          dailyRemaining > 0
+            ? '贡献账号可用，可以发起今日互赞。'
+            : '今日互赞名额已使用，明日自动恢复。'
+        )
+        : (contributor.last_error || '贡献账号当前不可用，请重新扫码恢复登录。')
+      setShareStatus(
+        qqLikeGlobalStatus,
+        message,
+        contributor.status === 'active' ? 'success' : 'failed',
+      )
+    }
+
+    function qqlikeRequestLevel(status) {
+      if (status === 'succeeded') return 'success'
+      if (['failed', 'uncertain', 'canceled'].includes(status)) return 'failed'
+      return ''
+    }
+
+    function renderQQLikeRecords(requests) {
+      qqLikeRecords.innerHTML = requests.length ? requests.map((item) => `
+        <tr>
+          <td>${escapeHtml(item.target_qq || '-')}</td>
+          <td>${escapeHtml(item.source_qq_masked || '等待分配')}</td>
+          <td>${Number(item.requested_times || 10)}</td>
+          <td><span class="status-pill ${qqlikeRequestLevel(item.status)}">${escapeHtml(item.status_label || item.status || '-')}</span></td>
+          <td>${escapeHtml(item.created_at || '-')}</td>
+        </tr>
+      `).join('') : '<tr><td colspan="5">暂无互赞记录</td></tr>'
+    }
+
+    function renderQQLikeTask(request) {
+      const status = request?.status || ''
+      const stages = ['submitted', 'assigned', 'running', 'finished']
+      const progressByStatus = {
+        waiting_source: 1,
+        assigned: 2,
+        running: 3,
+        succeeded: 4,
+        failed: 4,
+        uncertain: 4,
+        canceled: 4,
+      }
+      const progress = progressByStatus[status] || 0
+      qqLikeTaskSteps.forEach((step, index) => {
+        step.classList.toggle('done', progress > index + 1 || (progress === 4 && status === 'succeeded'))
+        step.classList.toggle('active', progress === index + 1 && status !== 'succeeded')
+        const detail = step.querySelector('span')
+        if (!request) {
+          detail.textContent = '—'
+          return
+        }
+        if (stages[index] === 'submitted') detail.textContent = request.created_at || '已记录'
+        if (stages[index] === 'assigned') detail.textContent = request.source_qq_masked || '等待其他账号'
+        if (stages[index] === 'running') detail.textContent = request.started_at || (status === 'running' ? '执行中' : '—')
+        if (stages[index] === 'finished') detail.textContent = request.finished_at || '—'
+      })
+      if (!request) {
+        qqLikeTaskSummary.textContent = '尚未提交今日互赞任务。'
+        return
+      }
+      qqLikeTaskSummary.textContent = `目标 ${request.target_qq}：${request.status_label || request.status}${request.result_message ? `，${request.result_message}` : ''}`
+    }
+
+    async function loadQQLikeQr() {
+      clearQQLikeQrImage()
+      const response = await fetch('/api/tools/qq-like/login/qr', {
+        cache: 'no-store',
+        headers: qqLikeRequestHeaders(false),
+      })
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(data.error || '二维码加载失败')
+      }
+      const blob = await response.blob()
+      qqLikeQrObjectUrl = URL.createObjectURL(blob)
+      qqLikeQrImage.src = qqLikeQrObjectUrl
+    }
+
+    function scheduleQQLikeLoginPoll() {
+      if (qqLikeLoginTimer) window.clearTimeout(qqLikeLoginTimer)
+      qqLikeLoginTimer = window.setTimeout(pollQQLikeLogin, 2500)
+    }
+
+    async function pollQQLikeLogin() {
+      if (!qqLikeAccessToken || qqLikeLogin.hidden) return
+      try {
+        const data = await qqLikeJsonRequest('/api/tools/qq-like/login/status')
+        if (data.login_state === 'active' && data.dashboard) {
+          stopQQLikePolling()
+          clearQQLikeQrImage()
+          renderQQLikeDashboard(data.dashboard)
+          scheduleQQLikeDashboard()
+          return
+        }
+        if (data.login_state === 'finalizing') {
+          qqLikeLoginStatus.textContent = '扫码已确认，正在校验 QQ 登录状态。'
+        } else if (data.login_state === 'waiting_scan') {
+          qqLikeLoginStatus.textContent = `等待扫码确认，二维码约 ${Number(data.expires_in_seconds || 0)} 秒后失效。`
+        } else {
+          qqLikeLoginStatus.textContent = '当前扫码任务已结束，可以重新发起登录。'
+          return
+        }
+        scheduleQQLikeLoginPoll()
+      } catch (error) {
+        qqLikeLoginStatus.textContent = `状态检查失败：${error.message}`
+        scheduleQQLikeLoginPoll()
+      }
+    }
+
+    async function startQQLikeLogin() {
+      qqLikeStartLogin.disabled = true
+      setShareStatus(qqLikeGlobalStatus, '正在启动独立 QQ 登录环境。')
+      try {
+        const data = await qqLikeJsonRequest('/api/tools/qq-like/login/start', {
+          method: 'POST',
+          json: true,
+          body: '{}',
+        })
+        if (data.access_token) {
+          setQQLikeAccess(data.access_token, data.contributor?.contributor_id || '')
+        }
+        if (data.recovery_code) {
+          qqLikeRecoveryCode.textContent = data.recovery_code
+          qqLikeRecoveryNotice.hidden = false
+        }
+        qqLikeGuest.hidden = true
+        qqLikeAccount.hidden = true
+        qqLikeLogin.hidden = false
+        qqLikeLoginStatus.textContent = `等待扫码确认，二维码约 ${Number(data.expires_in_seconds || 0)} 秒后失效。`
+        await loadQQLikeQr()
+        setShareStatus(qqLikeGlobalStatus, '二维码已生成，请使用手机 QQ 扫码。', 'success')
+        scheduleQQLikeLoginPoll()
+      } catch (error) {
+        setShareStatus(qqLikeGlobalStatus, `启动登录失败：${error.message}`, 'failed')
+      } finally {
+        qqLikeStartLogin.disabled = false
+      }
+    }
+
+    async function loadQQLikeDashboard() {
+      if (!qqLikeAccessToken) {
+        qqLikeAccessToken = readQQLikeLocalValue(qqLikeAccessTokenKey)
+      }
+      if (!qqLikeContributorId.value) {
+        qqLikeContributorId.value = readQQLikeLocalValue(qqLikeContributorIdKey)
+      }
+      if (!qqLikeAccessToken) {
+        renderQQLikeGuest()
+        return
+      }
+      try {
+        const data = await qqLikeJsonRequest('/api/tools/qq-like/dashboard')
+        renderQQLikeDashboard(data)
+        scheduleQQLikeDashboard()
+      } catch (error) {
+        if (error.status === 401) {
+          setQQLikeAccess('')
+          renderQQLikeGuest('本机贡献凭证已失效，请使用贡献账号 ID 和恢复码找回管理权。')
+          qqLikeManage.open = true
+          return
+        }
+        setShareStatus(qqLikeGlobalStatus, `状态加载失败：${error.message}`, 'failed')
+        scheduleQQLikeDashboard()
+      }
+    }
+
+    qqLikeStartLogin.addEventListener('click', startQQLikeLogin)
+    qqLikeReload.addEventListener('click', loadQQLikeDashboard)
+    qqLikeShowRecovery.addEventListener('click', () => {
+      qqLikeManage.open = true
+      qqLikeRecoveryInput.focus()
+    })
+    qqLikeManageToggle.addEventListener('click', () => {
+      qqLikeManage.open = !qqLikeManage.open
+    })
+    qqLikeRefreshQr.addEventListener('click', async () => {
+      qqLikeRefreshQr.disabled = true
+      try {
+        const data = await qqLikeJsonRequest('/api/tools/qq-like/login/refresh', {
+          method: 'POST',
+          json: true,
+          body: '{}',
+        })
+        await loadQQLikeQr()
+        qqLikeLoginStatus.textContent = `二维码已刷新，约 ${Number(data.expires_in_seconds || 0)} 秒后失效。`
+        scheduleQQLikeLoginPoll()
+      } catch (error) {
+        qqLikeLoginStatus.textContent = `刷新失败：${error.message}`
+      } finally {
+        qqLikeRefreshQr.disabled = false
+      }
+    })
+    qqLikeCancelLocal.addEventListener('click', () => {
+      if (qqLikeLoginTimer) window.clearTimeout(qqLikeLoginTimer)
+      qqLikeLoginTimer = null
+      clearQQLikeQrImage()
+      qqLikeLogin.hidden = true
+      qqLikeGuest.hidden = false
+      setShareStatus(qqLikeGlobalStatus, '扫码任务仍会在服务器超时后自动关闭，可随时重新打开。')
+    })
+
+    qqLikeRecoveryForm.addEventListener('submit', async (event) => {
+      event.preventDefault()
+      const contributorId = qqLikeContributorId.value.trim()
+      const recoveryCode = qqLikeRecoveryInput.value.trim().toUpperCase()
+      if (!contributorId || !recoveryCode) {
+        setShareStatus(qqLikeGlobalStatus, '请填写贡献账号 ID 和恢复码。', 'failed')
+        return
+      }
+      qqLikeRecover.disabled = true
+      try {
+        const data = await qqLikeJsonRequest('/api/tools/qq-like/access/recover', {
+          method: 'POST',
+          json: true,
+          body: JSON.stringify({
+            contributor_id: contributorId,
+            recovery_code: recoveryCode,
+          }),
+        })
+        setQQLikeAccess(data.access_token, data.contributor_id)
+        qqLikeRecoveryInput.value = ''
+        qqLikeManage.open = false
+        await loadQQLikeDashboard()
+      } catch (error) {
+        setShareStatus(qqLikeGlobalStatus, `找回失败：${error.message}`, 'failed')
+      } finally {
+        qqLikeRecover.disabled = false
+      }
+    })
+
+    qqLikeForgetLocal.addEventListener('click', () => {
+      stopQQLikePolling()
+      clearQQLikeQrImage()
+      setQQLikeAccess('')
+      renderQQLikeGuest('已清除本机访问凭证，服务器登录态和贡献资格未删除。')
+    })
+
+    qqLikeRevoke.addEventListener('click', async () => {
+      if (!qqLikeAccessToken) {
+        setShareStatus(qqLikeGlobalStatus, '本机没有可用凭证，无法停止该贡献账号。', 'failed')
+        return
+      }
+      if (!window.confirm('停止后将删除本工具保存的 QQ 登录信息，且不能继续使用该贡献资格。确认继续吗？')) return
+      qqLikeRevoke.disabled = true
+      try {
+        const data = await qqLikeJsonRequest('/api/tools/qq-like/revoke', {
+          method: 'POST',
+          json: true,
+          body: '{}',
+        })
+        stopQQLikePolling()
+        clearQQLikeQrImage()
+        setQQLikeAccess('')
+        writeQQLikeLocalValue(qqLikeContributorIdKey, '')
+        qqLikeContributorId.value = ''
+        qqLikeManage.open = false
+        renderQQLikeGuest(data.message || '已停止贡献并删除登录信息。')
+      } catch (error) {
+        setShareStatus(qqLikeGlobalStatus, `停止贡献失败：${error.message}`, 'failed')
+      } finally {
+        qqLikeRevoke.disabled = false
+      }
+    })
+
+    qqLikeTarget.addEventListener('input', () => {
+      qqLikeTarget.value = qqLikeTarget.value.replace(/[^0-9]/g, '').slice(0, 12)
+    })
+
+    qqLikeRequestForm.addEventListener('submit', async (event) => {
+      event.preventDefault()
+      const targetQQ = qqLikeTarget.value.trim()
+      if (!/^[1-9][0-9]{4,11}$/.test(targetQQ)) {
+        setShareStatus(qqLikeGlobalStatus, '请输入 5-12 位、且不以 0 开头的 QQ 号。', 'failed')
+        return
+      }
+      if (!qqLikeAccessToken || qqLikeSubmit.disabled) {
+        setShareStatus(qqLikeGlobalStatus, '当前没有可用互赞资格。', 'failed')
+        return
+      }
+      const requestId = window.crypto?.randomUUID
+        ? window.crypto.randomUUID()
+        : `web-${Date.now()}-${Math.random().toString(16).slice(2)}`
+      qqLikeSubmit.disabled = true
+      setShareStatus(qqLikeGlobalStatus, '正在提交互赞任务。')
+      try {
+        const data = await qqLikeJsonRequest('/api/tools/qq-like/requests', {
+          method: 'POST',
+          json: true,
+          headers: { 'Idempotency-Key': requestId },
+          body: JSON.stringify({ target_qq: targetQQ }),
+        })
+        qqLikeTarget.value = ''
+        renderQQLikeTask(data.request)
+        setShareStatus(qqLikeGlobalStatus, '互赞任务已进入队列。', 'success')
+        await loadQQLikeDashboard()
+      } catch (error) {
+        setShareStatus(qqLikeGlobalStatus, `提交失败：${error.message}`, 'failed')
+        await loadQQLikeDashboard()
+      }
+    })
 
     reservedCopyGroupNumber?.addEventListener('click', async () => {
       try {
@@ -5830,6 +6861,10 @@ def _simple_page_html() -> str:
             showBaiduSharePanel()
             return
           }
+          if (toolId === 'qq-like') {
+            showQQLikePanel()
+            return
+          }
           if (toolId === 'douyin-growth') {
             showDouyinGrowthIntro()
             return
@@ -5858,6 +6893,10 @@ def _simple_page_html() -> str:
         const toolId = button.getAttribute('data-tool-shortcut')
         if (toolId === 'baidu-share') {
           showBaiduSharePanel()
+          return
+        }
+        if (toolId === 'qq-like') {
+          showQQLikePanel()
           return
         }
         showZeppStepPanel()
