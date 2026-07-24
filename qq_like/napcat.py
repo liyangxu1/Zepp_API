@@ -23,6 +23,7 @@ NAPCAT_IMAGE = (
 )
 MANAGED_LABEL_KEY = "com.litianyi.qq-like"
 MANAGED_LABEL_VALUE = "napcat-worker"
+MANAGED_CONTRIBUTOR_LABEL_KEY = "com.litianyi.qq-like.contributor"
 MANAGED_NETWORK_NAME = "qq-like-isolated"
 MANAGED_NETWORK_LABEL_VALUE = "isolated-network"
 CONTRIBUTOR_ID_RE = re.compile(r"^qlc_[0-9a-f]{32}$")
@@ -144,6 +145,14 @@ class NapCatSession:
     @property
     def qr_code_path(self) -> Path:
         return self.root / "cache" / "qrcode.png"
+
+
+@dataclass(frozen=True)
+class ManagedNapCatContainer:
+    """互赞工具创建的容器及其贡献账号归属。"""
+
+    name: str
+    contributor_id: str = ""
 
 
 def _require_contributor_id(contributor_id: str) -> str:
@@ -318,7 +327,7 @@ class DockerNapCatRuntime:
         normalized_id = _require_contributor_id(contributor_id)
         session_root = self.data_root / "sessions" / normalized_id
         secret_path = session_root / "private.json"
-        for child_name in ("qq", "config", "logs", "cache"):
+        for child_name in ("qq", "config", "cache"):
             child = session_root / child_name
             child.mkdir(parents=True, exist_ok=True)
             os.chmod(child, 0o700)
@@ -391,6 +400,8 @@ class DockerNapCatRuntime:
             session.container_name,
             "--label",
             f"{MANAGED_LABEL_KEY}={MANAGED_LABEL_VALUE}",
+            "--label",
+            f"{MANAGED_CONTRIBUTOR_LABEL_KEY}={session.contributor_id}",
             "--network",
             MANAGED_NETWORK_NAME,
             "--memory",
@@ -402,17 +413,17 @@ class DockerNapCatRuntime:
             "--security-opt",
             "no-new-privileges:true",
             "--log-opt",
-            "max-size=10m",
+            "max-size=2m",
             "--log-opt",
-            "max-file=2",
+            "max-file=1",
+            "--tmpfs",
+            "/app/napcat/logs:rw,noexec,nosuid,size=16m",
             "-e",
             f"WEBUI_TOKEN={session.webui_token}",
             "-v",
             f"{session.root / 'qq'}:/app/.config/QQ",
             "-v",
             f"{session.root / 'config'}:/app/napcat/config",
-            "-v",
-            f"{session.root / 'logs'}:/app/napcat/logs",
             "-v",
             f"{session.root / 'cache'}:/app/napcat/cache",
             "-p",
@@ -500,7 +511,11 @@ class DockerNapCatRuntime:
             raise NapCatError("登录二维码文件不是有效 PNG")
         return payload
 
-    def _managed_container_names(self) -> List[str]:
+    def managed_containers(self) -> List[ManagedNapCatContainer]:
+        """返回互赞工具容器，并读取新容器携带的完整贡献账号标签。"""
+        format_expression = (
+            f'{{{{.Names}}}}|{{{{.Label "{MANAGED_CONTRIBUTOR_LABEL_KEY}"}}}}'
+        )
         completed = self.runner.run(
             [
                 "docker",
@@ -509,18 +524,32 @@ class DockerNapCatRuntime:
                 "--filter",
                 f"label={MANAGED_LABEL_KEY}={MANAGED_LABEL_VALUE}",
                 "--format",
-                "{{.Names}}",
+                format_expression,
             ],
             timeout=15,
         )
         if completed.returncode != 0:
             detail = (completed.stderr or completed.stdout or "").strip()[:500]
             raise NapCatError(f"读取 NapCat 容器状态失败: {detail or 'Docker 返回错误'}")
-        return sorted(
-            name.strip()
-            for name in (completed.stdout or "").splitlines()
-            if name.strip()
-        )
+        containers: List[ManagedNapCatContainer] = []
+        for raw_row in (completed.stdout or "").splitlines():
+            row = raw_row.strip()
+            if not row:
+                continue
+            name, separator, raw_contributor_id = row.partition("|")
+            contributor_id = raw_contributor_id.strip() if separator else ""
+            if contributor_id and not CONTRIBUTOR_ID_RE.fullmatch(contributor_id):
+                contributor_id = ""
+            containers.append(
+                ManagedNapCatContainer(
+                    name=name.strip(),
+                    contributor_id=contributor_id,
+                )
+            )
+        return sorted(containers, key=lambda item: item.name)
+
+    def _managed_container_names(self) -> List[str]:
+        return [item.name for item in self.managed_containers()]
 
     def _ensure_isolated_network(self) -> None:
         format_expression = (

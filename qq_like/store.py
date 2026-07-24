@@ -872,6 +872,18 @@ class QQLikeStore:
             )
         return True
 
+    def get_runtime_lease(self, lease_name: str) -> Optional[Dict[str, object]]:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT lease_name, owner_id, expires_at, updated_at
+                FROM qq_like_runtime_leases
+                WHERE lease_name = ?
+                """,
+                (lease_name,),
+            ).fetchone()
+        return dict(row) if row is not None else None
+
     def release_runtime_lease(self, *, lease_name: str, owner_id: str) -> None:
         with self._connect() as conn:
             conn.execute(

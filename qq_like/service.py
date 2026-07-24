@@ -11,6 +11,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from .napcat import (
     DockerNapCatRuntime,
+    ManagedNapCatContainer,
     NapCatError,
     NapCatProtocolError,
     NapCatRuntimeBusy,
@@ -128,12 +129,12 @@ class QQMutualLikeService:
     def start(self) -> None:
         if not self.enabled:
             return
-        self.store.init_schema()
-        self.runtime.stop_all_managed()
-        self._cleanup_stale_pending_contributors()
-        self.store.recover_interrupted_requests()
         if self._worker_thread and self._worker_thread.is_alive():
             return
+        self.store.init_schema()
+        self._recover_managed_runtime()
+        self._cleanup_stale_pending_contributors()
+        self.store.recover_interrupted_requests()
         self._worker_stop.clear()
         self._worker_thread = threading.Thread(
             target=self._worker_loop,
@@ -214,6 +215,11 @@ class QQMutualLikeService:
                     started_at=now,
                     expires_at=now + self.login_timeout_seconds,
                 )
+                self.store.update_contributor_status(
+                    contributor_id,
+                    "pending_login",
+                )
+                contributor = self.store.get_contributor(contributor_id) or contributor
             except Exception:
                 self._stop_runtime_safely(contributor_id)
                 self.store.release_runtime_lease(
@@ -225,6 +231,7 @@ class QQMutualLikeService:
                     self._delete_session_safely(contributor_id)
                 raise
 
+            self._worker_wakeup.set()
             return self._login_payload(
                 contributor,
                 created=created,
@@ -249,6 +256,10 @@ class QQMutualLikeService:
             )
             client.refresh_qr_code()
             client.request_qr_code()
+            now = self.time_factory()
+            login.started_at = now
+            login.expires_at = now + self.login_timeout_seconds
+            self._worker_wakeup.set()
             return self._login_payload(contributor, created=None)
 
     def poll_login(self, access_token: str) -> Dict[str, Any]:
@@ -262,68 +273,13 @@ class QQMutualLikeService:
                 "dashboard": self.dashboard(access_token),
             }
         with self._login_lock:
-            self._cleanup_expired_login_locked()
-            if (
-                self._active_login is None
-                or self._active_login.contributor_id != contributor_id
-            ):
-                return {
-                    "status": "success",
-                    "login_state": "not_started",
-                    "contributor": self._public_contributor(contributor),
-                }
-
-            login = self._active_login
-            self.store.acquire_runtime_lease(
-                lease_name=LOGIN_LEASE_NAME,
-                owner_id=login.owner_id,
-                ttl_seconds=self.login_timeout_seconds + 30,
-            )
-            client = self.runtime.wait_for_webui(
-                login.session,
-                attempts=2,
-                interval_seconds=0.5,
-            )
-            status = client.check_login_status()
-            if bool(status.get("isLogin")):
-                try:
-                    login_info = self.runtime.onebot_client(
-                        login.session
-                    ).get_login_info()
-                except NapCatError:
-                    return {
-                        "status": "success",
-                        "login_state": "finalizing",
-                        "contributor": self._public_contributor(contributor),
-                    }
-                qq_number = str(login_info["user_id"])
-                try:
-                    self.runtime.record_login(contributor_id, qq_number)
-                    contributor = self.store.mark_contributor_active(
-                        contributor_id,
-                        qq_number,
-                    )
-                except QQLikeStoreError:
-                    self._finish_login_locked(login, delete_session=True)
-                    self.store.revoke_contributor(contributor_id)
-                    raise
-                self._finish_login_locked(login)
-                self._worker_wakeup.set()
-                return {
-                    "status": "success",
-                    "login_state": "active",
-                    "dashboard": self._dashboard_for(contributor),
-                }
-
-            login_error = str(status.get("loginError") or "").strip()
+            result = self._advance_active_login_locked(contributor_id)
+            if result is not None:
+                return result
+            contributor = self.store.get_contributor(contributor_id) or contributor
             return {
                 "status": "success",
-                "login_state": "waiting_scan",
-                "expires_in_seconds": max(
-                    0,
-                    int(login.expires_at - self.time_factory()),
-                ),
-                "login_error": login_error[:200],
+                "login_state": "not_started",
                 "contributor": self._public_contributor(contributor),
             }
 
@@ -538,8 +494,9 @@ class QQMutualLikeService:
         while not self._worker_stop.is_set():
             try:
                 with self._login_lock:
-                    self._cleanup_expired_login_locked()
-                did_work = self.worker_once()
+                    self._advance_active_login_locked()
+                    login_running = self._active_login is not None
+                did_work = False if login_running else self.worker_once()
             except Exception as exc:
                 print(f"QQ 互赞 worker 异常: {exc}")
                 did_work = False
@@ -692,7 +649,253 @@ class QQMutualLikeService:
             self._active_login is not None
             and self._active_login.expires_at <= self.time_factory()
         ):
+            try:
+                self.store.update_contributor_status(
+                    self._active_login.contributor_id,
+                    "pending_login",
+                    error="扫码任务已结束，需要重新扫码",
+                )
+            except QQLikeStoreError:
+                pass
             self._finish_login_locked(self._active_login)
+
+    def _advance_active_login_locked(
+        self,
+        contributor_id: str = "",
+    ) -> Optional[Dict[str, Any]]:
+        self._cleanup_expired_login_locked()
+        login = self._active_login
+        if login is None:
+            return None
+        if contributor_id and login.contributor_id != contributor_id:
+            return None
+        contributor = self.store.get_contributor(login.contributor_id)
+        if contributor is None or contributor.get("status") == "revoked":
+            self._finish_login_locked(login, delete_session=True)
+            return None
+        if not self.store.acquire_runtime_lease(
+            lease_name=LOGIN_LEASE_NAME,
+            owner_id=login.owner_id,
+            ttl_seconds=self.login_timeout_seconds + 30,
+        ):
+            return self._finalizing_login_payload(
+                contributor,
+                "登录运行环境正在恢复",
+            )
+        try:
+            client = self.runtime.wait_for_webui(
+                login.session,
+                attempts=1,
+                interval_seconds=0,
+            )
+            status = client.check_login_status()
+        except NapCatError as exc:
+            return self._finalizing_login_payload(contributor, str(exc))
+        if not bool(status.get("isLogin")):
+            return {
+                "status": "success",
+                "login_state": "waiting_scan",
+                "expires_in_seconds": max(
+                    0,
+                    int(login.expires_at - self.time_factory()),
+                ),
+                "login_error": str(status.get("loginError") or "").strip()[:200],
+                "contributor": self._public_contributor(contributor),
+            }
+        try:
+            onebot = self.runtime.onebot_client(login.session)
+            onebot_status = onebot.get_status()
+            if not bool(onebot_status.get("online")) or not bool(
+                onebot_status.get("good")
+            ):
+                raise NapCatProtocolError("QQ 当前尚未完全上线")
+            login_info = onebot.get_login_info()
+        except NapCatError as exc:
+            return self._finalizing_login_payload(contributor, str(exc))
+        qq_number = str(login_info.get("user_id") or "")
+        try:
+            self.runtime.record_login(login.contributor_id, qq_number)
+            contributor = self.store.mark_contributor_active(
+                login.contributor_id,
+                qq_number,
+            )
+        except NapCatError as exc:
+            return self._finalizing_login_payload(contributor, str(exc))
+        except QQLikeStoreError:
+            self._finish_login_locked(login, delete_session=True)
+            self.store.revoke_contributor(login.contributor_id)
+            raise
+        self._finish_login_locked(login)
+        self._worker_wakeup.set()
+        return {
+            "status": "success",
+            "login_state": "active",
+            "dashboard": self._dashboard_for(contributor),
+        }
+
+    def _finalizing_login_payload(
+        self,
+        contributor: Dict[str, Any],
+        detail: str = "",
+    ) -> Dict[str, Any]:
+        return {
+            "status": "success",
+            "login_state": "finalizing",
+            "login_error": str(detail or "")[:200],
+            "contributor": self._public_contributor(contributor),
+        }
+
+    def _recover_managed_runtime(self) -> None:
+        lease = self.store.get_runtime_lease(LOGIN_LEASE_NAME)
+        owner_id = str((lease or {}).get("owner_id") or "")
+        containers = self.runtime.managed_containers()
+        if not containers:
+            owner_contributor_id = self._owner_login_contributor_id(owner_id)
+            if owner_contributor_id:
+                contributor = self.store.get_contributor(owner_contributor_id)
+                if contributor and contributor.get("status") == "pending_login":
+                    try:
+                        self.store.update_contributor_status(
+                            owner_contributor_id,
+                            "pending_login",
+                            error="服务重启后登录任务已结束，需要重新扫码",
+                        )
+                    except QQLikeStoreError:
+                        pass
+            if owner_id:
+                self.store.release_runtime_lease(
+                    lease_name=LOGIN_LEASE_NAME,
+                    owner_id=owner_id,
+                )
+            return
+        contributor_id = ""
+        delete_session_after_stop = False
+        try:
+            if len(containers) != 1:
+                self._mark_recovery_failed(
+                    containers,
+                    "检测到多个遗留登录环境，需要重新扫码",
+                    owner_id=owner_id,
+                )
+                return
+            container = containers[0]
+            contributor_id = self._resolve_recovery_contributor(
+                container,
+                owner_id,
+            )
+            contributor = (
+                self.store.get_contributor(contributor_id)
+                if contributor_id
+                else None
+            )
+            if (
+                contributor is None
+                or contributor.get("status") != "pending_login"
+                or (owner_id and not owner_id.startswith("login:"))
+            ):
+                return
+            session = self.runtime.prepare_session(contributor_id)
+            webui = self.runtime.wait_for_webui(
+                session,
+                attempts=2,
+                interval_seconds=0.5,
+            )
+            if not bool(webui.check_login_status().get("isLogin")):
+                raise NapCatProtocolError("扫码登录尚未确认")
+            onebot = self.runtime.onebot_client(session)
+            status = onebot.get_status()
+            if not bool(status.get("online")) or not bool(status.get("good")):
+                raise NapCatProtocolError("QQ 当前尚未完全上线")
+            login_info = onebot.get_login_info()
+            qq_number = str(login_info.get("user_id") or "")
+            self.runtime.record_login(contributor_id, qq_number)
+            self.store.mark_contributor_active(contributor_id, qq_number)
+        except QQLikeStoreError as exc:
+            if contributor_id:
+                try:
+                    self.store.revoke_contributor(contributor_id)
+                    delete_session_after_stop = True
+                except QQLikeStoreError:
+                    pass
+            print(f"恢复 QQ 互赞扫码账号失败: {exc}")
+        except NapCatError as exc:
+            if contributor_id:
+                try:
+                    self.store.update_contributor_status(
+                        contributor_id,
+                        "pending_login",
+                        error=f"服务重启后未能确认扫码结果，请重新扫码：{exc}",
+                    )
+                except QQLikeStoreError:
+                    pass
+        finally:
+            self.runtime.stop_all_managed()
+            if delete_session_after_stop and contributor_id:
+                self._delete_session_safely(contributor_id)
+            if owner_id:
+                self.store.release_runtime_lease(
+                    lease_name=LOGIN_LEASE_NAME,
+                    owner_id=owner_id,
+                )
+
+    def _resolve_recovery_contributor(
+        self,
+        container: ManagedNapCatContainer,
+        owner_id: str,
+    ) -> str:
+        owner_contributor_id = self._owner_login_contributor_id(owner_id)
+        if container.contributor_id:
+            if (
+                owner_contributor_id
+                and container.contributor_id != owner_contributor_id
+            ):
+                return ""
+            return container.contributor_id
+        matches = [
+            str(item.get("id") or "")
+            for item in self.store.list_contributors(limit=500)
+            if container.name
+            == f"qq-like-napcat-{str(item.get('id') or '')[-12:]}"
+        ]
+        if len(matches) != 1:
+            return ""
+        if owner_contributor_id and matches[0] != owner_contributor_id:
+            return ""
+        return matches[0]
+
+    @staticmethod
+    def _owner_login_contributor_id(owner_id: str) -> str:
+        owner_parts = owner_id.split(":")
+        if len(owner_parts) >= 2 and owner_parts[0] == "login":
+            return owner_parts[1]
+        return ""
+
+    def _mark_recovery_failed(
+        self,
+        containers: List[ManagedNapCatContainer],
+        message: str,
+        *,
+        owner_id: str = "",
+    ) -> None:
+        contributor_ids = {
+            item.contributor_id
+            for item in containers
+            if item.contributor_id
+        }
+        owner_contributor_id = self._owner_login_contributor_id(owner_id)
+        if owner_contributor_id:
+            contributor_ids.add(owner_contributor_id)
+        for contributor_id in contributor_ids:
+            contributor = self.store.get_contributor(contributor_id)
+            if contributor and contributor.get("status") == "pending_login":
+                try:
+                    self.store.update_contributor_status(
+                        contributor_id,
+                        "pending_login",
+                        error=message,
+                    )
+                except QQLikeStoreError:
+                    pass
 
     def _finish_login_locked(
         self,

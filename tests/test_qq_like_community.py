@@ -35,6 +35,22 @@ class QQLikeCommunityTest(unittest.TestCase):
             self.assertTrue(path.is_file())
             self.assertGreater(path.stat().st_size, 1024)
 
+    def test_pending_login_resumes_after_page_refresh(self) -> None:
+        page = app._simple_page_html()
+
+        self.assertIn(
+            "data?.contributor?.status === 'pending_login'",
+            page,
+        )
+        self.assertIn(
+            "登录任务正在后端运行，关闭或刷新页面不会中断。",
+            page,
+        )
+        self.assertIn(
+            "qqLikeReload.addEventListener('click', () => loadQQLikeDashboard())",
+            page,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

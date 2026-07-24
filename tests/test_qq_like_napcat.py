@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from qq_like.napcat import (
+    MANAGED_CONTRIBUTOR_LABEL_KEY,
     MANAGED_LABEL_KEY,
     MANAGED_LABEL_VALUE,
     MANAGED_NETWORK_LABEL_VALUE,
@@ -45,6 +46,7 @@ class FakeRunner:
     def __init__(self):
         self.calls = []
         self.managed_names = []
+        self.managed_contributors = {}
         self.network_exists = False
         self.network_label = MANAGED_NETWORK_LABEL_VALUE
         self.fail_run = False
@@ -52,7 +54,14 @@ class FakeRunner:
     def run(self, args, *, timeout=60):
         self.calls.append((list(args), timeout))
         if args[:2] == ["docker", "ps"]:
-            stdout = "\n".join(self.managed_names)
+            stdout = "\n".join(
+                (
+                    f"{name}|{self.managed_contributors.get(name, '')}"
+                    if MANAGED_CONTRIBUTOR_LABEL_KEY in " ".join(args)
+                    else name
+                )
+                for name in self.managed_names
+            )
             if stdout:
                 stdout += "\n"
             return subprocess.CompletedProcess(args, 0, stdout=stdout, stderr="")
@@ -74,12 +83,22 @@ class FakeRunner:
                 return subprocess.CompletedProcess(args, 1, stdout="", stderr="启动失败")
             container_name = args[args.index("--name") + 1]
             self.managed_names = [container_name]
+            labels = [
+                args[index + 1]
+                for index, value in enumerate(args[:-1])
+                if value == "--label"
+            ]
+            for label in labels:
+                key, separator, value = label.partition("=")
+                if separator and key == MANAGED_CONTRIBUTOR_LABEL_KEY:
+                    self.managed_contributors[container_name] = value
             return subprocess.CompletedProcess(args, 0, stdout="container-id\n", stderr="")
         if args[:2] == ["docker", "stop"]:
             container_name = args[-1]
             self.managed_names = [
                 name for name in self.managed_names if name != container_name
             ]
+            self.managed_contributors.pop(container_name, None)
             return subprocess.CompletedProcess(args, 0, stdout="stopped\n", stderr="")
         raise AssertionError(f"未预期的命令: {args}")
 
@@ -221,6 +240,19 @@ class DockerNapCatRuntimeTest(unittest.TestCase):
             f"{MANAGED_LABEL_KEY}={MANAGED_LABEL_VALUE}",
             run_command,
         )
+        self.assertIn(
+            f"{MANAGED_CONTRIBUTOR_LABEL_KEY}={CONTRIBUTOR_ID}",
+            run_command,
+        )
+        self.assertIn("--tmpfs", run_command)
+        self.assertIn(
+            "/app/napcat/logs:rw,noexec,nosuid,size=16m",
+            run_command,
+        )
+        self.assertNotIn(
+            f"{session.root / 'logs'}:/app/napcat/logs",
+            run_command,
+        )
         self.assertIn("--network", run_command)
         self.assertIn(MANAGED_NETWORK_NAME, run_command)
         network_commands = [
@@ -237,6 +269,18 @@ class DockerNapCatRuntimeTest(unittest.TestCase):
         self.assertEqual(
             f"qq-like-napcat-{CONTRIBUTOR_ID[-12:]}",
             session.container_name,
+        )
+        self.assertFalse((session.root / "logs").exists())
+
+    def test_managed_container_exposes_full_contributor_label(self) -> None:
+        session = self.runtime.start(CONTRIBUTOR_ID)
+
+        self.assertEqual(
+            [(session.container_name, CONTRIBUTOR_ID)],
+            [
+                (item.name, item.contributor_id)
+                for item in self.runtime.managed_containers()
+            ],
         )
 
     def test_runtime_rejects_another_managed_container(self) -> None:

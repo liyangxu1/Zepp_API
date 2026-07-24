@@ -1,9 +1,11 @@
 import tempfile
+import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from qq_like.napcat import (
+    ManagedNapCatContainer,
     NapCatError,
     NapCatProtocolError,
     NapCatRuntimeBusy,
@@ -38,9 +40,12 @@ class FakeOneBot:
         self.session = session
 
     def get_status(self):
-        if self.runtime.login_error:
+        if self.runtime.login_error or not self.runtime.onebot_ready:
             raise NapCatProtocolError(self.runtime.login_error)
-        return {"online": True, "good": True}
+        return {
+            "online": self.runtime.status_online,
+            "good": self.runtime.status_good,
+        }
 
     def get_login_info(self):
         if self.runtime.login_error:
@@ -51,6 +56,7 @@ class FakeOneBot:
         return {"user_id": qq_number, "nickname": "测试账号"}
 
     def send_like(self, target_qq, *, times=10):
+        self.runtime.send_attempts += 1
         if self.runtime.send_error:
             raise NapCatProtocolError(self.runtime.send_error)
         self.runtime.likes.append(
@@ -70,14 +76,19 @@ class FakeRuntime:
         self.qq_numbers = {}
         self.pending_login_qq = "3313696759"
         self.login_ready = False
+        self.onebot_ready = True
+        self.status_online = True
+        self.status_good = True
         self.login_error = ""
         self.send_error = ""
         self.refresh_count = 0
         self.likes = []
+        self.send_attempts = 0
         self.deleted = []
         self.stop_all_count = 0
         self.start_count = 0
         self.start_error = ""
+        self.managed = []
 
     def _session(self, contributor_id):
         root = self.root / contributor_id
@@ -110,6 +121,7 @@ class FakeRuntime:
 
     def stop_all_managed(self):
         self.active_contributor = ""
+        self.managed = []
         self.stop_all_count += 1
         return 0
 
@@ -118,6 +130,12 @@ class FakeRuntime:
 
     def wait_for_webui(self, session, *, attempts=30, interval_seconds=1):
         return FakeWebUI(self)
+
+    def prepare_session(self, contributor_id):
+        return self._session(contributor_id)
+
+    def managed_containers(self):
+        return list(self.managed)
 
     def read_qr_code_png(self, session):
         return session.qr_code_path.read_bytes()
@@ -180,6 +198,107 @@ class QQMutualLikeServiceTest(unittest.TestCase):
         with self.assertRaisesRegex(QQMutualLikeServiceError, "另一个 QQ"):
             self.service.start_login(remote_addr="second", user_agent="test")
 
+    def test_worker_confirms_login_without_browser_polling(self):
+        self.service.worker_interval_seconds = 0.2
+        self.service.start()
+        started = self.service.start_login(
+            remote_addr="127.0.0.1",
+            user_agent="test",
+        )
+        contributor_id = started["contributor"]["contributor_id"]
+        self.runtime.login_ready = True
+        self.service._worker_wakeup.set()
+
+        deadline = time.time() + 2
+        while time.time() < deadline:
+            if self.store.get_contributor(contributor_id)["status"] == "active":
+                break
+            time.sleep(0.02)
+        self.service.stop()
+
+        self.assertEqual(
+            "active",
+            self.store.get_contributor(contributor_id)["status"],
+        )
+        self.assertEqual("", self.runtime.active_contributor)
+
+    def test_login_stays_finalizing_until_onebot_is_ready(self):
+        started = self.service.start_login(
+            remote_addr="127.0.0.1",
+            user_agent="test",
+        )
+        self.runtime.login_ready = True
+        self.runtime.onebot_ready = False
+
+        pending = self.service.poll_login(started["access_token"])
+        self.assertEqual("finalizing", pending["login_state"])
+        self.assertNotEqual("", self.runtime.active_contributor)
+
+        self.runtime.onebot_ready = True
+        completed = self.service.poll_login(started["access_token"])
+        self.assertEqual("active", completed["login_state"])
+        self.assertEqual("", self.runtime.active_contributor)
+
+    def test_expired_login_is_stopped_and_reports_rescan(self):
+        started = self.service.start_login(
+            remote_addr="127.0.0.1",
+            user_agent="test",
+        )
+        contributor_id = started["contributor"]["contributor_id"]
+        self.service._active_login.expires_at = self.service.time_factory() - 1
+
+        result = self.service.poll_login(started["access_token"])
+
+        self.assertEqual("not_started", result["login_state"])
+        contributor = self.store.get_contributor(contributor_id)
+        self.assertEqual("pending_login", contributor["status"])
+        self.assertIn("重新扫码", contributor["last_error"])
+        self.assertEqual("", self.runtime.active_contributor)
+
+    def test_startup_recovers_confirmed_legacy_login_and_stops_container(self):
+        created = self.store.create_contributor()
+        contributor_id = created["contributor_id"]
+        session = self.runtime.prepare_session(contributor_id)
+        owner_id = f"login:{contributor_id}:legacy"
+        self.store.acquire_runtime_lease(
+            lease_name="qq-like-napcat-runtime",
+            owner_id=owner_id,
+            ttl_seconds=300,
+        )
+        self.runtime.active_contributor = contributor_id
+        self.runtime.managed = [
+            ManagedNapCatContainer(name=session.container_name)
+        ]
+        self.runtime.login_ready = True
+
+        self.service._recover_managed_runtime()
+
+        contributor = self.store.get_contributor(contributor_id)
+        self.assertEqual("active", contributor["status"])
+        self.assertEqual("3313696759", contributor["qq_number"])
+        self.assertEqual([], self.runtime.managed)
+        self.assertIsNone(
+            self.store.get_runtime_lease("qq-like-napcat-runtime")
+        )
+
+    def test_startup_releases_orphaned_login_lease_and_requests_rescan(self):
+        created = self.store.create_contributor()
+        contributor_id = created["contributor_id"]
+        owner_id = f"login:{contributor_id}:orphaned"
+        self.store.acquire_runtime_lease(
+            lease_name="qq-like-napcat-runtime",
+            owner_id=owner_id,
+            ttl_seconds=300,
+        )
+
+        self.service._recover_managed_runtime()
+
+        contributor = self.store.get_contributor(contributor_id)
+        self.assertIn("重新扫码", contributor["last_error"])
+        self.assertIsNone(
+            self.store.get_runtime_lease("qq-like-napcat-runtime")
+        )
+
     def test_contributor_request_uses_another_account_and_ten_likes(self):
         requester = self.create_active("100001")
         source = self.create_active("100002")
@@ -237,6 +356,7 @@ class QQMutualLikeServiceTest(unittest.TestCase):
         updated = self.store.get_request(request["request_id"])
         self.assertEqual("uncertain", updated["status"])
         self.assertEqual("execution_uncertain", updated["result_code"])
+        self.assertEqual(1, self.runtime.send_attempts)
         self.assertEqual([], self.runtime.likes)
 
     def test_runtime_start_failure_does_not_disable_source_or_busy_loop(self):

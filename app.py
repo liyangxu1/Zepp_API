@@ -6603,8 +6603,44 @@ def _simple_page_html() -> str:
       qqLikeLoginTimer = window.setTimeout(pollQQLikeLogin, 2500)
     }
 
+    async function renderQQLikeLoginProgress(data) {
+      const contributor = data?.contributor || {}
+      const contributorId = contributor.contributor_id || ''
+      if (contributorId) {
+        writeQQLikeLocalValue(qqLikeContributorIdKey, contributorId)
+        qqLikeContributorId.value = contributorId
+      }
+      if (qqLikeDashboardTimer) {
+        window.clearTimeout(qqLikeDashboardTimer)
+        qqLikeDashboardTimer = null
+      }
+      qqLikeGuest.hidden = true
+      qqLikeAccount.hidden = true
+      qqLikeLogin.hidden = false
+      if (data.login_state === 'finalizing') {
+        qqLikeLoginStatus.textContent = '扫码已确认，正在校验 QQ 登录状态。'
+      } else {
+        qqLikeLoginStatus.textContent = `等待扫码确认，二维码约 ${Number(data.expires_in_seconds || 0)} 秒后失效。`
+        if (!qqLikeQrImage.getAttribute('src')) {
+          try {
+            await loadQQLikeQr()
+          } catch (error) {
+            qqLikeLoginStatus.textContent = `登录仍在进行，二维码暂时无法加载：${error.message}`
+          }
+        }
+      }
+      setShareStatus(
+        qqLikeGlobalStatus,
+        data.login_state === 'finalizing'
+          ? '已扫码，后端正在自动确认登录。'
+          : '登录任务正在后端运行，关闭或刷新页面不会中断。',
+        'success',
+      )
+      scheduleQQLikeLoginPoll()
+    }
+
     async function pollQQLikeLogin() {
-      if (!qqLikeAccessToken || qqLikeLogin.hidden) return
+      if (!qqLikeAccessToken || currentToolId !== 'qq-like') return
       try {
         const data = await qqLikeJsonRequest('/api/tools/qq-like/login/status')
         if (data.login_state === 'active' && data.dashboard) {
@@ -6614,15 +6650,16 @@ def _simple_page_html() -> str:
           scheduleQQLikeDashboard()
           return
         }
-        if (data.login_state === 'finalizing') {
-          qqLikeLoginStatus.textContent = '扫码已确认，正在校验 QQ 登录状态。'
-        } else if (data.login_state === 'waiting_scan') {
-          qqLikeLoginStatus.textContent = `等待扫码确认，二维码约 ${Number(data.expires_in_seconds || 0)} 秒后失效。`
-        } else {
-          qqLikeLoginStatus.textContent = '当前扫码任务已结束，可以重新发起登录。'
+        if (['finalizing', 'waiting_scan'].includes(data.login_state)) {
+          await renderQQLikeLoginProgress(data)
           return
         }
-        scheduleQQLikeLoginPoll()
+        if (qqLikeLoginTimer) {
+          window.clearTimeout(qqLikeLoginTimer)
+          qqLikeLoginTimer = null
+        }
+        clearQQLikeQrImage()
+        await loadQQLikeDashboard({ skipLoginResume: true })
       } catch (error) {
         qqLikeLoginStatus.textContent = `状态检查失败：${error.message}`
         scheduleQQLikeLoginPoll()
@@ -6659,7 +6696,8 @@ def _simple_page_html() -> str:
       }
     }
 
-    async function loadQQLikeDashboard() {
+    async function loadQQLikeDashboard(options = {}) {
+      const skipLoginResume = options?.skipLoginResume === true
       if (!qqLikeAccessToken) {
         qqLikeAccessToken = readQQLikeLocalValue(qqLikeAccessTokenKey)
       }
@@ -6673,6 +6711,18 @@ def _simple_page_html() -> str:
       try {
         const data = await qqLikeJsonRequest('/api/tools/qq-like/dashboard')
         renderQQLikeDashboard(data)
+        if (data?.contributor?.status === 'pending_login' && !skipLoginResume) {
+          const loginData = await qqLikeJsonRequest('/api/tools/qq-like/login/status')
+          if (loginData.login_state === 'active' && loginData.dashboard) {
+            renderQQLikeDashboard(loginData.dashboard)
+            scheduleQQLikeDashboard()
+            return
+          }
+          if (['finalizing', 'waiting_scan'].includes(loginData.login_state)) {
+            await renderQQLikeLoginProgress(loginData)
+            return
+          }
+        }
         scheduleQQLikeDashboard()
       } catch (error) {
         if (error.status === 401) {
@@ -6687,7 +6737,7 @@ def _simple_page_html() -> str:
     }
 
     qqLikeStartLogin.addEventListener('click', startQQLikeLogin)
-    qqLikeReload.addEventListener('click', loadQQLikeDashboard)
+    qqLikeReload.addEventListener('click', () => loadQQLikeDashboard())
     qqLikeShowRecovery.addEventListener('click', () => {
       qqLikeManage.open = true
       qqLikeRecoveryInput.focus()
