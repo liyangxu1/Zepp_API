@@ -204,38 +204,66 @@ BAIDU_SHARE_CLEANUP_INTERVAL_SECONDS="600"
 
 ### 6) QQ 互赞工具
 
-QQ 互赞工具使用独立 NapCat 容器保存贡献账号登录态，只调用 OneBot
-`send_like`，不接入消息事件，也不读取聊天记录、联系人或群数据。普通用户需要先扫码贡献一个可用 QQ，每天可发起 1 个任务；系统会选择另一台当天未使用的贡献账号，固定执行 10 次点赞。管理员可以不贡献账号直接提交任务，但仍受可用来源账号和每日来源额度约束。
+移动互赞模式下，工具网只维护测试白名单、当天活跃池、任务租约和结果记录。
+QQ、NapCat、登录态、OneBot token 与 `send_like` 全部留在用户手机。服务器不
+启动 QQ、NapCat 或 Docker。
 
-默认关闭，部署时需要显式启用：
+线上配置：
 
 ```bash
-QQ_LIKE_ENABLED="1"
+QQ_LIKE_ENABLED="0"
+QQ_LIKE_MOBILE_ENABLED="1"
 QQ_LIKE_DATA_ROOT="/data/qq-like-tool"
-QQ_LIKE_DB_PATH="/data/qq-like-tool/qq_like.sqlite3"
-QQ_LIKE_WEBUI_PORT="16199"
-QQ_LIKE_ONEBOT_PORT="16100"
-QQ_LIKE_MAX_CONTRIBUTORS="20"
-QQ_LIKE_PENDING_RETENTION_HOURS="24"
+QQ_LIKE_MOBILE_DB_PATH="/data/qq-like-tool/qq_like_mobile.sqlite3"
+QQ_LIKE_MOBILE_MAX_BATCH_SIZE="8"
+QQ_LIKE_MOBILE_LEASE_SECONDS="600"
+QQ_LIKE_MOBILE_LIKES_PER_TARGET="10"
 ```
 
 运行约束：
 
-- 服务器同时只运行一个互赞专用 NapCat，内存限制 512MB、CPU 限制 0.75 核。
-- WebUI 和 OneBot 端口仅绑定 `127.0.0.1`，使用独立随机密钥。
-- 容器使用 `qq-like-isolated` 独立 Docker 网络，不加入 QQbot 的网络。
-- 每个贡献账号使用独立数据目录；未完成扫码的目录 24 小时后自动清理。
-- 登录信息、恢复码哈希和 SQLite 数据目录不允许提交到 Git。
-- OneBot 返回结果不明确时任务标记为“结果待确认”，不会自动重复点赞。
+- 只有后台启用的白名单 QQ 才能注册；
+- QQ 在线确认和心跳成功后才进入北京时间当天活跃池；
+- 同一来源、目标和业务日期只有一条有向任务；
+- 每次最多租约 8 条，租约 600 秒；
+- 失败或结果不明均为终态，不自动重新派发；
+- 重置设备绑定会立即撤销旧任务凭证，下次注册签发新凭证；
+- SQLite 只保存任务凭证、安装 ID 和结果幂等键的 SHA-256 哈希。
 
 管理员接口：
 
 ```text
-GET  /api/admin/qq-like
-POST /api/admin/qq-like/requests
+GET  /api/admin/qq-like/mobile/overview
+POST /api/admin/qq-like/mobile/allowlist
+POST /api/admin/qq-like/mobile/accounts/action
 ```
 
-管理员提交也必须携带唯一的 `Idempotency-Key`，避免超时重试造成重复任务。
+`/admin` 可以维护白名单、查看当天活跃账号和任务明细、停用账号及重置设备
+绑定。完整 QQ 号只在已认证后台返回。
+
+#### Android 登录助手
+
+`android-app/` 的用户界面只展示 QQ 扫码登录、当前账号、今日互赞和任务
+记录。NapCat、Termux、OneBot、端口、服务器地址和运行日志不会出现在用户
+主流程中。扫码页使用原生二维码界面，不再展示 NapCat WebUI。QQ 在线后 App
+自动注册和心跳；用户主动点击“开始互赞”后，App 分批领取当天全部任务，并通过只监听
+`127.0.0.1:3000` 的本机 OneBot 严格串行执行 `send_like`。
+
+第一版仅支持前台手动同步，不包含后台 Service、定时任务或开机常驻。App
+不会把 QQ 会话、Cookie、扫码信息、NapCat 配置或 OneBot token 上传到服务器。
+构建、协议和本机幂等规则见 `android-app/README.md`。
+
+移动端接口：
+
+```text
+POST /api/tools/qq-like/mobile/register
+POST /api/tools/qq-like/mobile/heartbeat
+POST /api/tools/qq-like/mobile/tasks/lease
+POST /api/tools/qq-like/mobile/tasks/result
+```
+
+服务器只保存移动端访问令牌和结果幂等键的 SHA-256 哈希，不保存其明文。
+租约过期会直接标记为 `uncertain`，不会自动重新下发同一任务。
 
 ### 7) HTTP / HTTPS
 

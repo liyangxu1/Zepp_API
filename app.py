@@ -46,6 +46,8 @@ from typing import Dict, Optional, Tuple, Union
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from qq_like import (
+    MobileQQLikeService,
+    MobileQQLikeStoreError,
     NapCatError,
     QQLikeStoreError,
     QQMutualLikeService,
@@ -212,6 +214,21 @@ QQ_LIKE_DB_PATH = Path(
         str(QQ_LIKE_DATA_ROOT / "qq_like.sqlite3"),
     )
 ).expanduser()
+QQ_LIKE_MOBILE_ENABLED = os.environ.get(
+    "QQ_LIKE_MOBILE_ENABLED",
+    "0",
+).strip().lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+QQ_LIKE_MOBILE_DB_PATH = Path(
+    os.environ.get(
+        "QQ_LIKE_MOBILE_DB_PATH",
+        str(QQ_LIKE_DATA_ROOT / "qq_like_mobile.sqlite3"),
+    )
+).expanduser()
 QQ_LIKE_WEBUI_PORT = _env_int("QQ_LIKE_WEBUI_PORT", 16199, 1024, 65535)
 QQ_LIKE_ONEBOT_PORT = _env_int("QQ_LIKE_ONEBOT_PORT", 16100, 1024, 65535)
 QQ_LIKE_MAX_CONTRIBUTORS = _env_int(
@@ -225,6 +242,24 @@ QQ_LIKE_PENDING_RETENTION_HOURS = _env_int(
     24,
     1,
     24 * 30,
+)
+QQ_LIKE_MOBILE_MAX_BATCH_SIZE = _env_int(
+    "QQ_LIKE_MOBILE_MAX_BATCH_SIZE",
+    8,
+    1,
+    50,
+)
+QQ_LIKE_MOBILE_LEASE_SECONDS = _env_int(
+    "QQ_LIKE_MOBILE_LEASE_SECONDS",
+    600,
+    15,
+    600,
+)
+QQ_LIKE_MOBILE_LIKES_PER_TARGET = _env_int(
+    "QQ_LIKE_MOBILE_LIKES_PER_TARGET",
+    10,
+    1,
+    10,
 )
 DEVICE_BIND_QR_ENV = os.environ.get("DEVICE_BIND_QR_PATH", "").strip()
 DEVICE_BIND_QR_TOKEN_TTL_SECONDS = 120
@@ -7859,6 +7894,7 @@ def _admin_page_html() -> str:
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>轻工具箱管理后台</title>
+  <link rel="icon" href="data:," />
   <style>
     :root {
       --bg: #f7fafc;
@@ -7888,6 +7924,10 @@ def _admin_page_html() -> str:
       width: min(760px, 100%);
       display: grid;
       gap: 16px;
+    }
+
+    .shell.wide {
+      width: min(1180px, 100%);
     }
 
     .panel {
@@ -8031,6 +8071,117 @@ def _admin_page_html() -> str:
       overflow-wrap: anywhere;
     }
 
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 16px;
+    }
+
+    .stat-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #f8fafc;
+      padding: 15px;
+    }
+
+    .stat-label {
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .stat-value {
+      margin-top: 6px;
+      font-size: 28px;
+      font-weight: 950;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .admin-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 16px;
+      margin-top: 16px;
+    }
+
+    .sub-panel {
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+    }
+
+    .inline-form {
+      display: grid;
+      grid-template-columns: minmax(120px, 0.8fr) minmax(160px, 1.2fr) auto;
+      gap: 8px;
+      margin-top: 14px;
+    }
+
+    .inline-form input {
+      min-width: 0;
+    }
+
+    .table-wrap {
+      width: 100%;
+      margin-top: 14px;
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+
+    th, td {
+      padding: 10px 11px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: middle;
+    }
+
+    th {
+      background: #f8fafc;
+      color: var(--muted);
+      font-weight: 850;
+    }
+
+    tr:last-child td { border-bottom: 0; }
+
+    .mini-button {
+      min-height: 30px;
+      padding: 0 9px;
+      margin: 2px;
+      font-size: 12px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      border-radius: 999px;
+      padding: 0 9px;
+      background: #e2e8f0;
+      color: #475569;
+      font-size: 12px;
+      font-weight: 850;
+    }
+
+    .badge.success {
+      background: #dcfce7;
+      color: #166534;
+    }
+
+    .badge.failed {
+      background: #ffedd5;
+      color: #9a3412;
+    }
+
     .copy-toast {
       position: fixed;
       left: 50%;
@@ -8067,11 +8218,14 @@ def _admin_page_html() -> str:
       .qr-login-box { grid-template-columns: 1fr; }
       .storage-row { grid-template-columns: 1fr; }
       .actions button, .actions .button-link { width: 100%; }
+      .stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .admin-grid, .inline-form { grid-template-columns: 1fr; }
+      .inline-form button { width: 100%; }
     }
   </style>
 </head>
 <body>
-  <main class="shell">
+  <main class="shell" id="adminShell">
     <section class="panel">
       <h1>轻工具箱管理后台</h1>
       <p>用于查看和刷新当天 6 位验证码。用户提交步数前必须填写当天验证码。</p>
@@ -8137,12 +8291,104 @@ def _admin_page_html() -> str:
       <div class="status" id="baiduStorageStatus"></div>
       <div class="storage-list" id="baiduStorageJobs"></div>
     </section>
+
+    <section class="panel hidden" id="qqLikeMobilePanel">
+      <h2>QQ App 互赞管理</h2>
+      <p>服务器只维护测试白名单、当天活跃池和任务结果；QQ 登录、NapCat 与 send_like 均在用户手机执行。</p>
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-label">当天活跃</div>
+          <div class="stat-value" id="qqMobileActiveCount">0</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">待完成</div>
+          <div class="stat-value" id="qqMobilePendingCount">0</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">成功</div>
+          <div class="stat-value" id="qqMobileSuccessCount">0</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">异常</div>
+          <div class="stat-value" id="qqMobileAbnormalCount">0</div>
+        </div>
+      </div>
+
+      <div class="admin-grid">
+        <section class="sub-panel">
+          <h2>测试白名单</h2>
+          <p>首次注册只允许启用的 QQ；重置绑定后旧任务凭证立即失效。</p>
+          <form class="inline-form" id="qqMobileAllowlistForm">
+            <input id="qqMobileAllowlistQq" inputmode="numeric" maxlength="12" placeholder="QQ 号" />
+            <input id="qqMobileAllowlistNote" maxlength="200" placeholder="备注（可选）" />
+            <button type="submit" id="qqMobileAllowlistSubmit">添加 / 更新</button>
+          </form>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>QQ 号</th>
+                  <th>状态</th>
+                  <th>备注</th>
+                  <th>设备</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="qqMobileAllowlistRows"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="sub-panel">
+          <h2>当天活跃账号</h2>
+          <p id="qqMobileBusinessDate">正在读取北京时间业务日期。</p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>QQ 号</th>
+                  <th>App 版本</th>
+                  <th>最后心跳</th>
+                  <th>今日状态</th>
+                </tr>
+              </thead>
+              <tbody id="qqMobileAccountRows"></tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+
+      <hr />
+      <h2>今日任务明细</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>来源 QQ</th>
+              <th>目标 QQ</th>
+              <th>状态</th>
+              <th>点赞次数</th>
+              <th>租约到期</th>
+              <th>结果时间</th>
+              <th>结果</th>
+            </tr>
+          </thead>
+          <tbody id="qqMobileTaskRows"></tbody>
+        </table>
+      </div>
+      <div class="actions">
+        <button class="ghost" type="button" id="reloadQqMobile">刷新互赞数据</button>
+      </div>
+      <div class="status" id="qqMobileStatus"></div>
+    </section>
   </main>
   <div class="copy-toast" id="copyToast" role="status" aria-live="polite" aria-atomic="true"></div>
 
   <script>
     const loginPanel = document.getElementById('loginPanel')
     const dashboardPanel = document.getElementById('dashboardPanel')
+    const adminShell = document.getElementById('adminShell')
+    const qqLikeMobilePanel = document.getElementById('qqLikeMobilePanel')
     const loginForm = document.getElementById('loginForm')
     const loginStatus = document.getElementById('loginStatus')
     const dashboardStatus = document.getElementById('dashboardStatus')
@@ -8169,6 +8415,16 @@ def _admin_page_html() -> str:
     const cleanupBaiduStorage = document.getElementById('cleanupBaiduStorage')
     const baiduStorageStatus = document.getElementById('baiduStorageStatus')
     const baiduStorageJobs = document.getElementById('baiduStorageJobs')
+    const qqMobileStatus = document.getElementById('qqMobileStatus')
+    const qqMobileBusinessDate = document.getElementById('qqMobileBusinessDate')
+    const qqMobileAllowlistForm = document.getElementById('qqMobileAllowlistForm')
+    const qqMobileAllowlistQq = document.getElementById('qqMobileAllowlistQq')
+    const qqMobileAllowlistNote = document.getElementById('qqMobileAllowlistNote')
+    const qqMobileAllowlistSubmit = document.getElementById('qqMobileAllowlistSubmit')
+    const qqMobileAllowlistRows = document.getElementById('qqMobileAllowlistRows')
+    const qqMobileAccountRows = document.getElementById('qqMobileAccountRows')
+    const qqMobileTaskRows = document.getElementById('qqMobileTaskRows')
+    const reloadQqMobile = document.getElementById('reloadQqMobile')
     let baiduQrSign = ''
     let baiduQrPolling = false
 
@@ -8215,11 +8471,15 @@ def _admin_page_html() -> str:
     function showLogin() {
       loginPanel.classList.remove('hidden')
       dashboardPanel.classList.add('hidden')
+      qqLikeMobilePanel.classList.add('hidden')
+      adminShell.classList.remove('wide')
     }
 
     function showDashboard() {
       loginPanel.classList.add('hidden')
       dashboardPanel.classList.remove('hidden')
+      qqLikeMobilePanel.classList.remove('hidden')
+      adminShell.classList.add('wide')
     }
 
     function renderToken(data) {
@@ -8240,6 +8500,20 @@ def _admin_page_html() -> str:
       renderToken(data)
       showDashboard()
       setStatus(dashboardStatus, '验证码已加载。', 'success')
+    }
+
+    async function loadAdminSession() {
+      const resp = await fetch('/api/admin/session', { cache: 'no-store' })
+      const data = await resp.json()
+      if (!resp.ok || data.status !== 'success') {
+        throw new Error(data.error || '后台登录态检查失败')
+      }
+      if (!data.authenticated) {
+        showLogin()
+        setStatus(loginStatus, '请先登录后台。')
+        return false
+      }
+      return true
     }
 
     function renderBaiduWorkerStatus(data) {
@@ -8403,6 +8677,159 @@ def _admin_page_html() -> str:
       }
     }
 
+    function escapeHtml(value) {
+      return String(value == null ? '' : value)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#039;')
+    }
+
+    function qqTaskBadge(status) {
+      const labels = {
+        queued: '待领取',
+        leased: '执行中',
+        succeeded: '成功',
+        failed: '失败',
+        uncertain: '结果不明',
+      }
+      const state = status === 'succeeded'
+        ? 'success'
+        : (status === 'failed' || status === 'uncertain' ? 'failed' : '')
+      return `<span class="badge ${state}">${escapeHtml(labels[status] || status || '-')}</span>`
+    }
+
+    function renderQqMobileOverview(data) {
+      const summary = data.summary || {}
+      document.getElementById('qqMobileActiveCount').textContent = summary.active_accounts || 0
+      document.getElementById('qqMobilePendingCount').textContent = summary.pending || 0
+      document.getElementById('qqMobileSuccessCount').textContent = summary.succeeded || 0
+      document.getElementById('qqMobileAbnormalCount').textContent = summary.abnormal || 0
+      qqMobileBusinessDate.textContent = `北京时间业务日期：${data.business_date || '-'}`
+
+      const allowlist = Array.isArray(data.allowlist) ? data.allowlist : []
+      qqMobileAllowlistRows.innerHTML = allowlist.length
+        ? allowlist.map((item) => {
+          const action = item.enabled ? 'disable' : 'enable'
+          const actionText = item.enabled ? '停用' : '启用'
+          const deviceText = item.binding_reset_pending
+            ? '等待重新绑定'
+            : (item.device_bound ? '已绑定' : '未绑定')
+          return `
+            <tr>
+              <td>${escapeHtml(item.qq_number)}</td>
+              <td><span class="badge ${item.enabled ? 'success' : 'failed'}">${item.enabled ? '启用' : '停用'}</span></td>
+              <td>${escapeHtml(item.note || '-')}</td>
+              <td>${escapeHtml(deviceText)}</td>
+              <td>
+                <button class="mini-button ghost" type="button" data-qq-mobile-action="${action}" data-qq="${escapeHtml(item.qq_number)}">${actionText}</button>
+                <button class="mini-button ghost" type="button" data-qq-mobile-action="reset_binding" data-qq="${escapeHtml(item.qq_number)}">重置绑定</button>
+              </td>
+            </tr>
+          `
+        }).join('')
+        : '<tr><td colspan="5">暂无测试白名单。</td></tr>'
+
+      const accounts = Array.isArray(data.accounts) ? data.accounts : []
+      qqMobileAccountRows.innerHTML = accounts.length
+        ? accounts.map((item) => `
+          <tr>
+            <td>${escapeHtml(item.qq_number)}</td>
+            <td>${escapeHtml(item.app_version || '-')}</td>
+            <td>${escapeHtml(item.last_seen_at || '-')}</td>
+            <td><span class="badge ${item.active_today ? 'success' : ''}">${item.active_today ? '今日活跃' : '今日未活跃'}</span></td>
+          </tr>
+        `).join('')
+        : '<tr><td colspan="4">暂无已注册 App 账号。</td></tr>'
+
+      const tasks = Array.isArray(data.tasks) ? data.tasks : []
+      qqMobileTaskRows.innerHTML = tasks.length
+        ? tasks.map((item) => `
+          <tr>
+            <td>${escapeHtml(item.source_qq)}</td>
+            <td>${escapeHtml(item.target_qq)}</td>
+            <td>${qqTaskBadge(item.status)}</td>
+            <td>${escapeHtml(item.requested_times)}</td>
+            <td>${escapeHtml(item.lease_expires_at || '-')}</td>
+            <td>${escapeHtml(item.finished_at || '-')}</td>
+            <td>${escapeHtml(item.result_code || '-')}</td>
+          </tr>
+        `).join('')
+        : '<tr><td colspan="7">今天暂无任务。</td></tr>'
+    }
+
+    async function loadQqMobileOverview() {
+      setStatus(qqMobileStatus, '正在加载互赞数据...')
+      const resp = await fetch('/api/admin/qq-like/mobile/overview', {
+        cache: 'no-store'
+      })
+      if (resp.status === 401) {
+        showLogin()
+        return
+      }
+      const data = await resp.json()
+      if (!resp.ok || data.status !== 'success') {
+        throw new Error(data.error || '互赞数据加载失败')
+      }
+      renderQqMobileOverview(data)
+      setStatus(qqMobileStatus, '互赞数据已刷新。', 'success')
+    }
+
+    async function updateQqMobileAllowlist(event) {
+      event.preventDefault()
+      const qqNumber = qqMobileAllowlistQq.value.trim()
+      if (!qqNumber) {
+        setStatus(qqMobileStatus, '请填写 QQ 号。', 'failed')
+        return
+      }
+      qqMobileAllowlistSubmit.disabled = true
+      try {
+        const resp = await fetch('/api/admin/qq-like/mobile/allowlist', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            qq_number: qqNumber,
+            note: qqMobileAllowlistNote.value.trim(),
+            enabled: true,
+          })
+        })
+        const data = await resp.json()
+        if (!resp.ok || data.status !== 'success') {
+          throw new Error(data.error || '白名单更新失败')
+        }
+        qqMobileAllowlistQq.value = ''
+        qqMobileAllowlistNote.value = ''
+        renderQqMobileOverview(data)
+        setStatus(qqMobileStatus, '测试白名单已更新。', 'success')
+      } catch (err) {
+        setStatus(qqMobileStatus, `白名单更新失败：${err.message || err}`, 'failed')
+      } finally {
+        qqMobileAllowlistSubmit.disabled = false
+      }
+    }
+
+    async function runQqMobileAccountAction(qqNumber, action) {
+      if (action === 'reset_binding' && !window.confirm(`确定重置 QQ ${qqNumber} 的设备绑定吗？旧任务凭证会立即失效。`)) {
+        return
+      }
+      try {
+        const resp = await fetch('/api/admin/qq-like/mobile/accounts/action', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ qq_number: qqNumber, action })
+        })
+        const data = await resp.json()
+        if (!resp.ok || data.status !== 'success') {
+          throw new Error(data.error || '账号操作失败')
+        }
+        renderQqMobileOverview(data)
+        setStatus(qqMobileStatus, '账号状态已更新。', 'success')
+      } catch (err) {
+        setStatus(qqMobileStatus, `账号操作失败：${err.message || err}`, 'failed')
+      }
+    }
+
     loginForm.addEventListener('submit', async (event) => {
       event.preventDefault()
       loginBtn.disabled = true
@@ -8420,6 +8847,7 @@ def _admin_page_html() -> str:
         await loadToken()
         loadBaiduWorkerStatus().catch((err) => setStatus(baiduAdminStatus, `加载失败：${err.message || err}`, 'failed'))
         loadBaiduStorageStatus().catch((err) => setStatus(baiduStorageStatus, `加载失败：${err.message || err}`, 'failed'))
+        loadQqMobileOverview().catch((err) => setStatus(qqMobileStatus, `加载失败：${err.message || err}`, 'failed'))
       } catch (err) {
         setStatus(loginStatus, `登录失败：${err.message || err}`, 'failed')
       } finally {
@@ -8459,6 +8887,18 @@ def _admin_page_html() -> str:
 
     importBaiduCookie.addEventListener('click', importBaiduCookieToWorker)
     startBaiduQrLogin.addEventListener('click', startBaiduQrLoginFlow)
+    qqMobileAllowlistForm.addEventListener('submit', updateQqMobileAllowlist)
+    reloadQqMobile.addEventListener('click', () => {
+      loadQqMobileOverview().catch((err) => setStatus(qqMobileStatus, `加载失败：${err.message || err}`, 'failed'))
+    })
+    qqMobileAllowlistRows.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-qq-mobile-action]')
+      if (!button) return
+      runQqMobileAccountAction(
+        button.getAttribute('data-qq') || '',
+        button.getAttribute('data-qq-mobile-action') || ''
+      )
+    })
 
     copyToken.addEventListener('click', async () => {
       try {
@@ -8479,9 +8919,14 @@ def _admin_page_html() -> str:
       setStatus(loginStatus, '已退出登录。')
     })
 
-    loadToken()
-      .then(() => loadBaiduWorkerStatus().catch((err) => setStatus(baiduAdminStatus, `加载失败：${err.message || err}`, 'failed')))
-      .then(() => loadBaiduStorageStatus().catch((err) => setStatus(baiduStorageStatus, `加载失败：${err.message || err}`, 'failed')))
+    loadAdminSession()
+      .then((authenticated) => {
+        if (!authenticated) return
+        return loadToken()
+          .then(() => loadBaiduWorkerStatus().catch((err) => setStatus(baiduAdminStatus, `加载失败：${err.message || err}`, 'failed')))
+          .then(() => loadBaiduStorageStatus().catch((err) => setStatus(baiduStorageStatus, `加载失败：${err.message || err}`, 'failed')))
+          .then(() => loadQqMobileOverview().catch((err) => setStatus(qqMobileStatus, `加载失败：${err.message || err}`, 'failed')))
+      })
       .catch(() => showLogin())
   </script>
 </body>
@@ -8523,7 +8968,17 @@ def _run_http_server(
         max_contributors=QQ_LIKE_MAX_CONTRIBUTORS,
         pending_retention_hours=QQ_LIKE_PENDING_RETENTION_HOURS,
     )
-    qq_like_runtime_state = {"startup_error": ""}
+    qq_like_mobile_service = MobileQQLikeService.from_path(
+        QQ_LIKE_MOBILE_DB_PATH,
+        enabled=QQ_LIKE_MOBILE_ENABLED,
+        max_batch_size=QQ_LIKE_MOBILE_MAX_BATCH_SIZE,
+        lease_seconds=QQ_LIKE_MOBILE_LEASE_SECONDS,
+        likes_per_target=QQ_LIKE_MOBILE_LIKES_PER_TARGET,
+    )
+    qq_like_runtime_state = {
+        "startup_error": "",
+        "mobile_startup_error": "",
+    }
 
     class ZeppThreadingHTTPServer(ThreadingHTTPServer):
         daemon_threads = True
@@ -8746,6 +9201,25 @@ def _run_http_server(
                 headers=self._admin_headers({"Set-Cookie": self._admin_clear_cookie_header()}),
             )
 
+        def _handle_admin_session(self) -> None:
+            if self.command != "GET":
+                self._json_response(
+                    {"status": "failed", "error": "只支持 GET"},
+                    status=405,
+                    headers=self._admin_headers(),
+                )
+                return
+            if not self._admin_access_allowed():
+                self._admin_forbidden()
+                return
+            self._json_response(
+                {
+                    "status": "success",
+                    "authenticated": self._admin_authenticated(),
+                },
+                headers=self._admin_headers(),
+            )
+
         def _handle_admin_daily_token(self) -> None:
             if self.command != "GET":
                 self._json_response({"status": "failed", "error": "只支持 GET"}, status=405)
@@ -8813,6 +9287,76 @@ def _run_http_server(
                 headers=self._admin_headers(),
             )
 
+        def _handle_admin_qq_like_mobile_overview(self) -> None:
+            if self.command != "GET":
+                self._json_response(
+                    {"status": "failed", "error": "只支持 GET"},
+                    status=405,
+                    headers=self._admin_headers(),
+                )
+                return
+            if not self._admin_require_auth():
+                return
+            if not self._qq_like_mobile_available():
+                return
+            try:
+                payload = qq_like_mobile_service.admin_overview()
+            except MobileQQLikeStoreError as exc:
+                self._qq_like_error(exc)
+                return
+            self._json_response(payload, headers=self._admin_headers())
+
+        def _handle_admin_qq_like_mobile_allowlist(
+            self,
+            params: Dict[str, str],
+        ) -> None:
+            if self.command != "POST":
+                self._json_response(
+                    {"status": "failed", "error": "只支持 POST"},
+                    status=405,
+                    headers=self._admin_headers(),
+                )
+                return
+            if not self._admin_require_auth():
+                return
+            if not self._qq_like_mobile_available():
+                return
+            try:
+                payload = qq_like_mobile_service.admin_upsert_allowlist(
+                    qq_number=params.get("qq_number", ""),
+                    enabled=params.get("enabled", True),
+                    note=params.get("note", ""),
+                )
+            except MobileQQLikeStoreError as exc:
+                self._qq_like_error(exc)
+                return
+            self._json_response(payload, headers=self._admin_headers())
+
+        def _handle_admin_qq_like_mobile_account_action(
+            self,
+            params: Dict[str, str],
+        ) -> None:
+            if self.command != "POST":
+                self._json_response(
+                    {"status": "failed", "error": "只支持 POST"},
+                    status=405,
+                    headers=self._admin_headers(),
+                )
+                return
+            if not self._admin_require_auth():
+                return
+            if not self._qq_like_mobile_available():
+                return
+            try:
+                payload = qq_like_mobile_service.admin_account_action(
+                    qq_number=params.get("qq_number", ""),
+                    action=params.get("action", ""),
+                )
+            except MobileQQLikeStoreError as exc:
+                self._qq_like_error(exc)
+                return
+            self._json_response(payload, headers=self._admin_headers())
+
         def _admin_page_response(self) -> None:
             if not self._admin_access_allowed():
                 self._html_response(
@@ -8856,6 +9400,44 @@ def _run_http_server(
                 return authorization[7:].strip()
             return ""
 
+        def _qq_like_mobile_token(self) -> str:
+            explicit = (
+                self.headers.get("X-QQ-Like-Mobile-Token") or ""
+            ).strip()
+            if explicit:
+                return explicit
+            authorization = (self.headers.get("Authorization") or "").strip()
+            if authorization.lower().startswith("bearer "):
+                return authorization[7:].strip()
+            return ""
+
+        def _qq_like_mobile_available(self) -> bool:
+            if not QQ_LIKE_MOBILE_ENABLED:
+                self._json_response(
+                    {
+                        "status": "failed",
+                        "error": "QQ 互赞工具尚未启用",
+                    },
+                    status=503,
+                    headers=self._qq_like_headers(),
+                )
+                return False
+            startup_error = qq_like_runtime_state.get(
+                "mobile_startup_error",
+                "",
+            )
+            if startup_error:
+                self._json_response(
+                    {
+                        "status": "failed",
+                        "error": "手机互赞任务服务暂不可用",
+                    },
+                    status=503,
+                    headers=self._qq_like_headers(),
+                )
+                return False
+            return True
+
         def _qq_like_available(self) -> bool:
             if not QQ_LIKE_ENABLED:
                 self._json_response(
@@ -8882,21 +9464,111 @@ def _run_http_server(
 
         def _qq_like_error(self, exc: Exception) -> None:
             message = str(exc or "QQ 互赞请求失败")
-            status = 400
-            if "凭证" in message:
+            status = int(getattr(exc, "http_status", 400))
+            if status == 400 and "凭证" in message:
                 status = 401
-            elif "正在" in message or "稍后" in message:
+            elif status == 400 and ("正在" in message or "稍后" in message):
                 status = 409
-            elif isinstance(exc, NapCatError):
+            elif status == 400 and isinstance(exc, NapCatError):
                 status = 503
             self._json_response(
                 {
                     "status": "failed",
                     "error": message[:300],
+                    "error_code": str(
+                        getattr(exc, "error_code", "qq_like_failed")
+                    ),
                 },
                 status=status,
                 headers=self._qq_like_headers(),
             )
+
+        def _handle_qq_like_mobile(
+            self,
+            path: str,
+            params: Dict[str, str],
+        ) -> bool:
+            mobile_prefix = "/api/tools/qq-like/mobile/"
+            if not path.startswith(mobile_prefix):
+                return False
+            if not self._qq_like_mobile_available():
+                return True
+            headers = self._qq_like_headers()
+            if self.command != "POST":
+                self._json_response(
+                    {"status": "failed", "error": "只支持 POST"},
+                    status=405,
+                    headers=headers,
+                )
+                return True
+
+            access_token = self._qq_like_mobile_token()
+            try:
+                if path == f"{mobile_prefix}register":
+                    self._json_response(
+                        qq_like_mobile_service.register(
+                            qq_number=params.get("qq_number", ""),
+                            install_id=params.get("install_id", ""),
+                            app_version=params.get("app_version", ""),
+                            access_token=access_token,
+                        ),
+                        headers=headers,
+                    )
+                    return True
+
+                if path == f"{mobile_prefix}heartbeat":
+                    self._json_response(
+                        qq_like_mobile_service.heartbeat(access_token),
+                        headers=headers,
+                    )
+                    return True
+
+                if path == f"{mobile_prefix}tasks/lease":
+                    self._json_response(
+                        qq_like_mobile_service.lease(
+                            access_token,
+                            requested_limit=(
+                                params.get("limit", "")
+                                or params.get("batch_size", "")
+                            ),
+                        ),
+                        headers=headers,
+                    )
+                    return True
+
+                if path == f"{mobile_prefix}tasks/result":
+                    self._json_response(
+                        qq_like_mobile_service.result(
+                            access_token,
+                            task_id=params.get("task_id", ""),
+                            lease_token=(
+                                params.get("lease_token", "")
+                                or params.get("lease_id", "")
+                            ),
+                            outcome=(
+                                params.get("outcome", "")
+                                or params.get("result_status", "")
+                                or params.get("result", "")
+                            ),
+                            result_code=params.get("result_code", ""),
+                            result_message=params.get("result_message", ""),
+                            idempotency_key=(
+                                self.headers.get("Idempotency-Key") or ""
+                            ).strip(),
+                        ),
+                        headers=headers,
+                    )
+                    return True
+
+                self._json_response(
+                    {"status": "failed", "error": "未知手机互赞接口"},
+                    status=404,
+                    headers=headers,
+                )
+                return True
+            except MobileQQLikeStoreError as exc:
+                self._qq_like_error(exc)
+                return True
 
         def _handle_qq_like(self, path: str, params: Dict[str, str]) -> bool:
             if not path.startswith("/api/tools/qq-like"):
@@ -9889,6 +10561,10 @@ def _run_http_server(
                 self._handle_admin_logout()
                 return
 
+            if path == "/api/admin/session":
+                self._handle_admin_session()
+                return
+
             if path == "/api/admin/daily-token":
                 self._handle_admin_daily_token()
                 return
@@ -9903,6 +10579,18 @@ def _run_http_server(
 
             if path == "/api/admin/qq-like/requests":
                 self._handle_admin_qq_like_request(params)
+                return
+
+            if path == "/api/admin/qq-like/mobile/overview":
+                self._handle_admin_qq_like_mobile_overview()
+                return
+
+            if path == "/api/admin/qq-like/mobile/allowlist":
+                self._handle_admin_qq_like_mobile_allowlist(params)
+                return
+
+            if path == "/api/admin/qq-like/mobile/accounts/action":
+                self._handle_admin_qq_like_mobile_account_action(params)
                 return
 
             if path == "/api/admin/baidu-share/worker":
@@ -9931,6 +10619,9 @@ def _run_http_server(
 
             if path == "/api/admin/baidu-share/qr/image":
                 self._handle_admin_baidu_share_qr_image(params)
+                return
+
+            if self._handle_qq_like_mobile(path, params):
                 return
 
             if self._handle_qq_like(path, params):
@@ -10139,6 +10830,12 @@ def _run_http_server(
     init_device_binding_db()
     init_zepp_token_cache_db()
     get_or_create_daily_token()
+    if QQ_LIKE_MOBILE_ENABLED:
+        try:
+            qq_like_mobile_service.start()
+        except Exception as exc:
+            qq_like_runtime_state["mobile_startup_error"] = str(exc)[:300]
+            print(f"手机互赞任务服务启动失败，原有工具继续运行: {exc}")
     if QQ_LIKE_ENABLED:
         try:
             qq_like_service.start()

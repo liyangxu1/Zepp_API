@@ -10,4 +10,10 @@ baidu_share_downloads/
 baidu_speed_tests/
 .baidupcs/
 .qq-like-data/
+android-app/.gradle/
+android-app/build/
+android-app/app/build/
+android-app/local.properties
+android-app/*.iml
+android-app/app/*.iml
 bin/BaiduPCS-Go

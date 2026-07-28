@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">互赞助手</string>
+    <string name="page_title">QQ 登录</string>
+    <string name="page_subtitle">扫码登录后开始互赞</string>
+    <string name="account_title">QQ 账号</string>
+    <string name="account_not_logged_in">还未登录 QQ</string>
+    <string name="account_login_hint">扫码后显示当前账号</string>
+    <string name="account_local_only">登录信息仅保存在本机</string>
+    <string name="scan_login">扫码登录</string>
+    <string name="today_mutual_like">今日互赞</string>
+    <string name="pending_label">待完成</string>
+    <string name="completed_label">已完成</string>
+    <string name="abnormal_label">异常</string>
+    <string name="start_mutual_like">开始互赞</string>
+    <string name="login_before_mutual_like">登录后即可开始互赞</string>
+    <string name="task_record_title">任务记录</string>
+    <string name="task_record_empty">登录后将在这里显示互赞任务</string>
+    <string name="privacy_footer">不会读取聊天记录</string>
+    <string name="prepare_environment">准备运行环境</string>
+    <string name="start_napcat">启动 NapCat</string>
+    <string name="open_login">打开 QQ 登录</string>
+    <string name="check_status">重新检查</string>
+    <string name="open_termux">打开 Termux</string>
+    <string name="mutual_like_title">前台互赞测试</string>
+    <string name="mutual_like_description">QQ 在线后自动加入当天列表；只有你点击后，App 才会分批串行完成当天任务，离开 App 后停止领取新任务。</string>
+    <string name="server_url_label">任务服务器地址</string>
+    <string name="server_url_hint">https://example.com</string>
+    <string name="configure_onebot">配置本机 OneBot</string>
+    <string name="join_mutual_like">加入 / 同步互赞</string>
+    <string name="mutual_like_waiting">等待配置本机 OneBot 并确认 QQ 登录。</string>
+    <string name="security_title">安全提示</string>
+    <string name="security_body">QQ 会话和 OneBot token 只保存在本机。服务器只接收 QQ 号、安装 ID、App 版本及任务结果；App 不上传 QQ 会话、Cookie 或 OneBot token。发包后响应不明的任务会标记为 uncertain，绝不自动重试。</string>
+    <string name="runtime_logs">运行日志</string>
+</resources>

@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/screen_background"
+    android:orientation="vertical"
+    android:paddingLeft="20dp"
+    android:paddingTop="18dp"
+    android:paddingRight="20dp"
+    android:paddingBottom="24dp">
+
+    <Button
+        android:id="@+id/backButton"
+        android:layout_width="wrap_content"
+        android:layout_height="44dp"
+        android:background="@android:color/transparent"
+        android:text="‹  返回"
+        android:textAllCaps="false"
+        android:textColor="@color/gray_700"
+        android:textSize="16sp" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="20dp"
+        android:fontFamily="sans-medium"
+        android:gravity="center"
+        android:text="QQ 扫码登录"
+        android:textColor="@color/gray_900"
+        android:textSize="26sp" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:gravity="center"
+        android:text="二维码仅用于本机 QQ 登录"
+        android:textColor="@color/gray_500"
+        android:textSize="14sp" />
+
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_marginTop="28dp"
+        android:layout_weight="1"
+        android:background="@drawable/bg_card"
+        android:elevation="3dp"
+        android:padding="28dp">
+
+        <ImageView
+            android:id="@+id/qrImage"
+            android:layout_width="300dp"
+            android:layout_height="300dp"
+            android:layout_gravity="center"
+            android:adjustViewBounds="true"
+            android:contentDescription="QQ 登录二维码"
+            android:scaleType="fitCenter" />
+
+        <ProgressBar
+            android:id="@+id/loginProgress"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_gravity="center"
+            android:indeterminateTint="@color/blue_primary" />
+    </FrameLayout>
+
+    <TextView
+        android:id="@+id/loginPageStatus"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="22dp"
+        android:gravity="center"
+        android:text="正在准备二维码…"
+        android:textColor="@color/gray_700"
+        android:textSize="15sp" />
+
+    <Button
+        android:id="@+id/refreshQrButton"
+        style="@style/SecondaryButton"
+        android:layout_marginTop="18dp"
+        android:enabled="false"
+        android:text="刷新二维码" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="18dp"
+        android:gravity="center"
+        android:text="登录信息仅保存在本机 · 不会读取聊天记录"
+        android:textColor="@color/gray_500"
+        android:textSize="12sp" />
+</LinearLayout>

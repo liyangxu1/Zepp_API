@@ -8,9 +8,10 @@ import secrets
 import sqlite3
 import string
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, Iterator, List, Optional
 
 
 SHANGHAI_TZ = timezone(timedelta(hours=8))
@@ -113,6 +114,15 @@ class QQLikeStore:
         conn.execute("PRAGMA busy_timeout = 30000")
         return conn
 
+    @contextmanager
+    def _connection(self) -> Iterator[sqlite3.Connection]:
+        conn = self._connect()
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
+
     def _now(self) -> datetime:
         value = self.now_factory()
         if value.tzinfo is None:
@@ -128,7 +138,7 @@ class QQLikeStore:
     def init_schema(self) -> None:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.db_path.parent.chmod(0o700)
-        with self._connect() as conn:
+        with self._connection() as conn:
             conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS qq_like_contributors (
@@ -219,7 +229,7 @@ class QQLikeStore:
         recovery_code = _new_recovery_code()
         now = self._now_text()
         session_ref = f"contributor-{contributor_id}"
-        with self._connect() as conn:
+        with self._connection() as conn:
             conn.execute(
                 """
                 INSERT INTO qq_like_contributors (
@@ -245,7 +255,7 @@ class QQLikeStore:
 
     def authenticate(self, access_token: str) -> Dict[str, object]:
         token_hash = _access_token_digest(str(access_token or ""))
-        with self._connect() as conn:
+        with self._connection() as conn:
             row = conn.execute(
                 """
                 SELECT *
@@ -262,7 +272,7 @@ class QQLikeStore:
         return contributor
 
     def recover_access(self, contributor_id: str, recovery_code: str) -> str:
-        with self._connect() as conn:
+        with self._connection() as conn:
             row = conn.execute(
                 """
                 SELECT recovery_hash, status
@@ -294,7 +304,7 @@ class QQLikeStore:
         return access_token
 
     def get_contributor(self, contributor_id: str) -> Optional[Dict[str, object]]:
-        with self._connect() as conn:
+        with self._connection() as conn:
             row = conn.execute(
                 "SELECT * FROM qq_like_contributors WHERE id = ?",
                 (contributor_id,),
@@ -309,7 +319,7 @@ class QQLikeStore:
         normalized_qq = _normalize_qq_number(qq_number)
         now = self._now_text()
         try:
-            with self._connect() as conn:
+            with self._connection() as conn:
                 cursor = conn.execute(
                     """
                     UPDATE qq_like_contributors
@@ -338,7 +348,7 @@ class QQLikeStore:
     ) -> None:
         if status not in CONTRIBUTOR_STATUSES - {"active", "revoked"}:
             raise QQLikeStoreError("不支持的贡献账号状态")
-        with self._connect() as conn:
+        with self._connection() as conn:
             cursor = conn.execute(
                 """
                 UPDATE qq_like_contributors
@@ -352,7 +362,7 @@ class QQLikeStore:
 
     def revoke_contributor(self, contributor_id: str) -> None:
         now = self._now_text()
-        with self._connect() as conn:
+        with self._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
                 "SELECT status FROM qq_like_contributors WHERE id = ?",
@@ -436,7 +446,7 @@ class QQLikeStore:
         business_date = self.business_date()
         now = self._now_text()
         try:
-            with self._connect() as conn:
+            with self._connection() as conn:
                 conn.execute("BEGIN IMMEDIATE")
                 existing = conn.execute(
                     """
@@ -562,7 +572,7 @@ class QQLikeStore:
     def assign_pending_requests(self, limit: int = 100) -> int:
         self.init_schema()
         assigned = 0
-        with self._connect() as conn:
+        with self._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
             rows = conn.execute(
                 """
@@ -583,7 +593,7 @@ class QQLikeStore:
         return assigned
 
     def get_request(self, request_id: str) -> Optional[Dict[str, object]]:
-        with self._connect() as conn:
+        with self._connection() as conn:
             row = conn.execute(
                 "SELECT * FROM qq_like_requests WHERE id = ?",
                 (request_id,),
@@ -604,13 +614,13 @@ class QQLikeStore:
             params.append(contributor_id)
         query += " ORDER BY created_at DESC, id DESC LIMIT ?"
         params.append(safe_limit)
-        with self._connect() as conn:
+        with self._connection() as conn:
             rows = conn.execute(query, tuple(params)).fetchall()
         return [dict(row) for row in rows]
 
     def list_contributors(self, limit: int = 200) -> List[Dict[str, object]]:
         safe_limit = max(1, min(int(limit), 500))
-        with self._connect() as conn:
+        with self._connection() as conn:
             rows = conn.execute(
                 """
                 SELECT *
@@ -623,7 +633,7 @@ class QQLikeStore:
         return [dict(row) for row in rows]
 
     def count_retained_contributors(self) -> int:
-        with self._connect() as conn:
+        with self._connection() as conn:
             count = conn.execute(
                 """
                 SELECT COUNT(*)
@@ -641,7 +651,7 @@ class QQLikeStore:
         cutoff = (
             self._now() - timedelta(hours=max(1, int(older_than_hours)))
         ).strftime("%Y-%m-%d %H:%M:%S")
-        with self._connect() as conn:
+        with self._connection() as conn:
             rows = conn.execute(
                 """
                 SELECT *
@@ -655,7 +665,7 @@ class QQLikeStore:
 
     def contributor_daily_summary(self, contributor_id: str) -> Dict[str, int]:
         business_date = self.business_date()
-        with self._connect() as conn:
+        with self._connection() as conn:
             request_count = conn.execute(
                 """
                 SELECT COUNT(*)
@@ -689,7 +699,7 @@ class QQLikeStore:
         }
 
     def next_assigned_request(self) -> Optional[Dict[str, object]]:
-        with self._connect() as conn:
+        with self._connection() as conn:
             row = conn.execute(
                 """
                 SELECT *
@@ -703,7 +713,7 @@ class QQLikeStore:
 
     def begin_request(self, request_id: str, source_contributor_id: str) -> bool:
         now = self._now_text()
-        with self._connect() as conn:
+        with self._connection() as conn:
             cursor = conn.execute(
                 """
                 UPDATE qq_like_requests
@@ -723,7 +733,7 @@ class QQLikeStore:
         reason: str = "",
     ) -> bool:
         now = self._now_text()
-        with self._connect() as conn:
+        with self._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
                 """
@@ -758,7 +768,7 @@ class QQLikeStore:
 
     def recover_interrupted_requests(self) -> int:
         now = self._now_text()
-        with self._connect() as conn:
+        with self._connection() as conn:
             cursor = conn.execute(
                 """
                 UPDATE qq_like_requests
@@ -783,7 +793,7 @@ class QQLikeStore:
         if status not in {"succeeded", "failed", "uncertain"}:
             raise QQLikeStoreError("不支持的任务完成状态")
         now = self._now_text()
-        with self._connect() as conn:
+        with self._connection() as conn:
             cursor = conn.execute(
                 """
                 UPDATE qq_like_requests
@@ -805,7 +815,7 @@ class QQLikeStore:
 
     def cancel_request(self, request_id: str) -> None:
         now = self._now_text()
-        with self._connect() as conn:
+        with self._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
                 "SELECT status FROM qq_like_requests WHERE id = ?",
@@ -842,7 +852,7 @@ class QQLikeStore:
         expires_at = (now + timedelta(seconds=max(10, ttl_seconds))).strftime(
             "%Y-%m-%d %H:%M:%S"
         )
-        with self._connect() as conn:
+        with self._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
                 """
@@ -873,7 +883,7 @@ class QQLikeStore:
         return True
 
     def get_runtime_lease(self, lease_name: str) -> Optional[Dict[str, object]]:
-        with self._connect() as conn:
+        with self._connection() as conn:
             row = conn.execute(
                 """
                 SELECT lease_name, owner_id, expires_at, updated_at
@@ -885,7 +895,7 @@ class QQLikeStore:
         return dict(row) if row is not None else None
 
     def release_runtime_lease(self, *, lease_name: str, owner_id: str) -> None:
-        with self._connect() as conn:
+        with self._connection() as conn:
             conn.execute(
                 """
                 DELETE FROM qq_like_runtime_leases

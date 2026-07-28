@@ -1,0 +1,284 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/screen_background"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingLeft="20dp"
+        android:paddingTop="24dp"
+        android:paddingRight="20dp"
+        android:paddingBottom="32dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:fontFamily="sans-medium"
+            android:text="@string/app_name"
+            android:textColor="@color/gray_900"
+            android:textSize="28sp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:background="@drawable/bg_card"
+            android:elevation="3dp"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:fontFamily="sans-medium"
+                android:text="@string/account_title"
+                android:textColor="@color/gray_900"
+                android:textSize="20sp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="20dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/accountAvatar"
+                    android:layout_width="88dp"
+                    android:layout_height="88dp"
+                    android:background="@drawable/bg_avatar"
+                    android:fontFamily="sans-medium"
+                    android:gravity="center"
+                    android:text="QQ"
+                    android:textColor="@color/blue_primary"
+                    android:textSize="22sp" />
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginLeft="18dp"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:id="@+id/loginStatus"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:fontFamily="sans-medium"
+                        android:text="@string/account_not_logged_in"
+                        android:textColor="@color/gray_900"
+                        android:textSize="20sp" />
+
+                    <TextView
+                        android:id="@+id/accountNickname"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="5dp"
+                        android:text="@string/account_login_hint"
+                        android:textColor="@color/gray_500"
+                        android:textSize="13sp" />
+
+                    <Button
+                        android:id="@+id/primaryButton"
+                        style="@style/PrimaryButton"
+                        android:layout_height="48dp"
+                        android:layout_marginTop="14dp"
+                        android:text="@string/scan_login" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="18dp"
+                android:gravity="center"
+                android:text="@string/account_local_only"
+                android:textColor="@color/gray_500"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="18dp"
+            android:background="@drawable/bg_card"
+            android:elevation="3dp"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:fontFamily="sans-medium"
+                android:text="@string/today_mutual_like"
+                android:textColor="@color/gray_900"
+                android:textSize="20sp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="22dp"
+                android:gravity="center"
+                android:orientation="horizontal">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:gravity="center"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/pending_label"
+                        android:textColor="@color/gray_500"
+                        android:textSize="13sp" />
+
+                    <TextView
+                        android:id="@+id/pendingCount"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:fontFamily="sans-medium"
+                        android:text="0"
+                        android:textColor="@color/blue_primary"
+                        android:textSize="28sp" />
+                </LinearLayout>
+
+                <View
+                    android:layout_width="1dp"
+                    android:layout_height="52dp"
+                    android:background="@color/gray_200" />
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:gravity="center"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/completed_label"
+                        android:textColor="@color/gray_500"
+                        android:textSize="13sp" />
+
+                    <TextView
+                        android:id="@+id/completedCount"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:fontFamily="sans-medium"
+                        android:text="0"
+                        android:textColor="@color/green_ok"
+                        android:textSize="28sp" />
+                </LinearLayout>
+
+                <View
+                    android:layout_width="1dp"
+                    android:layout_height="52dp"
+                    android:background="@color/gray_200" />
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:gravity="center"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/abnormal_label"
+                        android:textColor="@color/gray_500"
+                        android:textSize="13sp" />
+
+                    <TextView
+                        android:id="@+id/abnormalCount"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:fontFamily="sans-medium"
+                        android:text="0"
+                        android:textColor="@color/orange_warning"
+                        android:textSize="28sp" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <Button
+                android:id="@+id/mutualLikeButton"
+                style="@style/PrimaryButton"
+                android:layout_marginTop="22dp"
+                android:enabled="false"
+                android:text="@string/start_mutual_like" />
+
+            <TextView
+                android:id="@+id/mutualLikeStatus"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:gravity="center"
+                android:text="@string/login_before_mutual_like"
+                android:textColor="@color/gray_500"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="18dp"
+            android:background="@drawable/bg_card"
+            android:elevation="3dp"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:fontFamily="sans-medium"
+                android:text="@string/task_record_title"
+                android:textColor="@color/gray_900"
+                android:textSize="20sp" />
+
+            <TextView
+                android:id="@+id/taskRecordText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="24dp"
+                android:gravity="center"
+                android:lineSpacingExtra="3dp"
+                android:minHeight="96dp"
+                android:text="@string/task_record_empty"
+                android:textColor="@color/gray_500"
+                android:textSize="14sp" />
+        </LinearLayout>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:gravity="center"
+            android:text="@string/privacy_footer"
+            android:textColor="@color/gray_500"
+            android:textSize="12sp" />
+
+        <LinearLayout
+            android:layout_width="1dp"
+            android:layout_height="1dp"
+            android:visibility="gone">
+
+            <TextView android:id="@+id/termuxStatus" android:layout_width="1dp" android:layout_height="1dp" />
+            <TextView android:id="@+id/environmentStatus" android:layout_width="1dp" android:layout_height="1dp" />
+            <TextView android:id="@+id/runtimeStatus" android:layout_width="1dp" android:layout_height="1dp" />
+            <Button android:id="@+id/loginButton" android:layout_width="1dp" android:layout_height="1dp" />
+            <Button android:id="@+id/checkButton" android:layout_width="1dp" android:layout_height="1dp" />
+            <Button android:id="@+id/termuxButton" android:layout_width="1dp" android:layout_height="1dp" />
+            <Button android:id="@+id/oneBotButton" android:layout_width="1dp" android:layout_height="1dp" />
+            <EditText android:id="@+id/serverUrlInput" android:layout_width="1dp" android:layout_height="1dp" />
+            <TextView android:id="@+id/logView" android:layout_width="1dp" android:layout_height="1dp" />
+        </LinearLayout>
+    </LinearLayout>
+</ScrollView>

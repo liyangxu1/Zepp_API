@@ -1,0 +1,37 @@
+def embeddedInTermux = rootProject.hasProperty("termuxEmbedded")
+def mutualLikeServerUrl = project.findProperty("mutualLikeServerUrl")
+    ?: "https://openmemory.cloud:18080"
+
+apply plugin: embeddedInTermux ? "com.android.library" : "com.android.application"
+
+android {
+    namespace "com.litianyi.napcatassistant"
+    compileSdk 36
+
+    defaultConfig {
+        if (!embeddedInTermux) {
+            applicationId "com.litianyi.napcatassistant"
+        }
+        minSdk 26
+        targetSdk 36
+        versionCode 1
+        versionName "0.1.0"
+        resValue "string", "mutual_like_server_url", mutualLikeServerUrl
+    }
+
+    if (embeddedInTermux) {
+        sourceSets.main.manifest.srcFile "src/embedded/AndroidManifest.xml"
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+        }
+    }
+}

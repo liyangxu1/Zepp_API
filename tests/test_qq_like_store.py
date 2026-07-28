@@ -1,4 +1,5 @@
 import os
+import sqlite3
 import tempfile
 import unittest
 from datetime import datetime, timezone, timedelta
@@ -27,6 +28,21 @@ class QQLikeStoreTest(unittest.TestCase):
         created = self.store.create_contributor()
         self.store.mark_contributor_active(created["contributor_id"], qq_number)
         return created
+
+    def test_each_operation_closes_its_sqlite_connection(self) -> None:
+        connections = []
+        original_connect = self.store._connect
+
+        def tracked_connect():
+            connection = original_connect()
+            connections.append(connection)
+            return connection
+
+        self.store._connect = tracked_connect
+        self.assertIsNone(self.store.get_contributor("missing"))
+        self.assertEqual(1, len(connections))
+        with self.assertRaises(sqlite3.ProgrammingError):
+            connections[0].execute("SELECT 1")
 
     def test_storage_permissions_and_stale_pending_detection(self) -> None:
         self.assertEqual(0o700, os.stat(self.store.db_path.parent).st_mode & 0o777)
