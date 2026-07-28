@@ -148,7 +148,7 @@ Content-Type: application/json
 {
   "qq_number": "123456789",
   "install_id": "app-generated-uuid",
-  "app_version": "0.1.2"
+  "app_version": "0.1.3"
 }
 ```
 

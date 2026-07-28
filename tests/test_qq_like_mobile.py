@@ -8,6 +8,7 @@ import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Optional
 from unittest import mock
 
 import app
@@ -442,6 +443,12 @@ class MobileQQLikeHTTPAPITest(unittest.TestCase):
         self.release_dir.mkdir()
         self.release_manifest_path = self.release_dir / "latest.json"
         self.release_apk_path = self.release_dir / "latest.apk"
+        self.runtime_dir = root / "mobile-runtime"
+        self.runtime_dir.mkdir()
+        self.runtime_rootfs_path = (
+            self.runtime_dir / "debian-trixie-arm64-test.tar.gz"
+        )
+        self.runtime_rootfs_path.write_bytes(b"fake-debian-rootfs")
         self.release_apk_path.write_bytes(b"fake-android-apk")
         self.release_manifest_path.write_text(
             json.dumps(
@@ -486,6 +493,11 @@ class MobileQQLikeHTTPAPITest(unittest.TestCase):
                 ),
                 QQ_LIKE_MOBILE_RELEASE_APK_PATH=self.release_apk_path,
                 QQ_LIKE_MOBILE_RELEASE_CACHE={},
+                QQ_LIKE_MOBILE_RUNTIME_DIR=self.runtime_dir,
+                QQ_LIKE_MOBILE_RUNTIME_ROOTFS_PATH=(
+                    self.runtime_rootfs_path
+                ),
+                QQ_LIKE_MOBILE_RUNTIME_CACHE={},
                 QQ_LIKE_MOBILE_MAX_BATCH_SIZE=8,
                 QQ_LIKE_MOBILE_LEASE_SECONDS=600,
                 QQ_LIKE_MOBILE_LIKES_PER_TARGET=10,
@@ -554,14 +566,20 @@ class MobileQQLikeHTTPAPITest(unittest.TestCase):
         finally:
             connection.close()
 
-    def raw_request(self, path: str, *, method: str = "GET"):
+    def raw_request(
+        self,
+        path: str,
+        *,
+        method: str = "GET",
+        headers: Optional[dict] = None,
+    ):
         connection = http.client.HTTPConnection(
             "127.0.0.1",
             self.port,
             timeout=5,
         )
         try:
-            connection.request(method, path)
+            connection.request(method, path, headers=headers or {})
             response = connection.getresponse()
             return (
                 response.status,
@@ -705,6 +723,42 @@ class MobileQQLikeHTTPAPITest(unittest.TestCase):
         self.assertEqual(
             "application/vnd.android.package-archive",
             apk_headers["Content-Type"],
+        )
+        self.assertEqual("bytes", apk_headers["Accept-Ranges"])
+
+    def test_mobile_runtime_rootfs_supports_range_download(self) -> None:
+        status, headers, rootfs_data = self.raw_request(
+            "/api/tools/qq-like/mobile/runtime/debian-arm64-rootfs"
+        )
+        self.assertEqual(200, status)
+        self.assertEqual(b"fake-debian-rootfs", rootfs_data)
+        self.assertEqual("application/gzip", headers["Content-Type"])
+        self.assertEqual("bytes", headers["Accept-Ranges"])
+        self.assertEqual(
+            hashlib.sha256(b"fake-debian-rootfs").hexdigest(),
+            headers["ETag"].strip('"'),
+        )
+
+        status, range_headers, range_data = self.raw_request(
+            "/api/tools/qq-like/mobile/runtime/debian-arm64-rootfs",
+            headers={"Range": "bytes=5-10"},
+        )
+        self.assertEqual(206, status)
+        self.assertEqual(b"debian", range_data)
+        self.assertEqual(
+            "bytes 5-10/18",
+            range_headers["Content-Range"],
+        )
+
+        status, invalid_headers, invalid_data = self.raw_request(
+            "/api/tools/qq-like/mobile/runtime/debian-arm64-rootfs",
+            headers={"Range": "bytes=99-"},
+        )
+        self.assertEqual(416, status)
+        self.assertEqual(b"", invalid_data)
+        self.assertEqual(
+            "bytes */18",
+            invalid_headers["Content-Range"],
         )
 
     def test_http_rejects_unlisted_and_invalid_credentials(self) -> None:

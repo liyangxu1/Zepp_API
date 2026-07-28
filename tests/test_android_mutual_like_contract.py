@@ -90,6 +90,17 @@ class AndroidMutualLikeContractTest(unittest.TestCase):
         self.assertIn("STATE=IDLE", progress)
         self.assertIn('write_progress "RUNNING"', script)
         self.assertIn('write_progress "DONE" "100"', script)
+        self.assertIn(
+            "/api/tools/qq-like/mobile/runtime/debian-arm64-rootfs",
+            script,
+        )
+        self.assertIn("ROOTFS_SHA256=", script)
+        self.assertIn('curl -fL -sS', script)
+        self.assertIn('proot-distro install -n napcat', script)
+        self.assertNotIn(
+            'execute_command "proot-distro install debian',
+            script,
+        )
         self.assertIn("operationProgressBar", layout)
         self.assertIn("operationProgressPercent", layout)
 

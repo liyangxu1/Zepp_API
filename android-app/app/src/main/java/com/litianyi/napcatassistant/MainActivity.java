@@ -384,7 +384,7 @@ public final class MainActivity extends Activity {
             "正在准备运行环境",
             1,
             "正在启动 NapCat 官方安装流程",
-            "阶段 1/5 · 请保持 App 在前台"
+            "阶段 1/6 · 请保持 App 在前台"
         );
         try {
             TermuxBridge.run(

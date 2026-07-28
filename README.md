@@ -219,6 +219,8 @@ QQ_LIKE_MOBILE_MAX_BATCH_SIZE="8"
 QQ_LIKE_MOBILE_LEASE_SECONDS="600"
 QQ_LIKE_MOBILE_LIKES_PER_TARGET="10"
 QQ_LIKE_MOBILE_RELEASE_DIR="/data/web/zepp-api-python/.qq-like-releases"
+QQ_LIKE_MOBILE_RUNTIME_DIR="/data/web/zepp-api-python/.qq-like-runtime"
+QQ_LIKE_MOBILE_RUNTIME_ROOTFS_PATH="/data/web/zepp-api-python/.qq-like-runtime/debian-trixie-arm64-20260713.tar.gz"
 ```
 
 运行约束：
@@ -247,11 +249,16 @@ App 更新接口不需要 QQ 登录或任务凭证：
 ```text
 GET /api/tools/qq-like/mobile/app/update?current_version_code=1003
 GET /api/tools/qq-like/mobile/app/apk
+GET /api/tools/qq-like/mobile/runtime/debian-arm64-rootfs
 ```
 
 发布目录包含 `latest.json` 与 `latest.apk`。服务端按 APK 实际内容计算
 SHA-256 和文件大小并返回给 App；App 下载完成后必须同时校验大小和 SHA-256，
 校验通过才会打开 Android 系统安装确认页。
+
+首次初始化不再由手机直连 Docker Hub。服务端只提供固定版本的 ARM64 Debian
+rootfs 静态文件，并支持 HTTP Range 断点续传；App 按固定大小和 SHA-256 校验
+后在手机本地安装容器，再继续执行 NapCat 官方安装流程。服务器不运行该容器。
 
 #### Android 登录助手
 

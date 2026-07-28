@@ -248,6 +248,22 @@ QQ_LIKE_MOBILE_RELEASE_APK_PATH = Path(
     )
 ).expanduser()
 QQ_LIKE_MOBILE_RELEASE_CACHE: Dict[str, object] = {}
+QQ_LIKE_MOBILE_RUNTIME_DIR = Path(
+    os.environ.get(
+        "QQ_LIKE_MOBILE_RUNTIME_DIR",
+        str(Path(__file__).with_name(".qq-like-runtime")),
+    )
+).expanduser()
+QQ_LIKE_MOBILE_RUNTIME_ROOTFS_PATH = Path(
+    os.environ.get(
+        "QQ_LIKE_MOBILE_RUNTIME_ROOTFS_PATH",
+        str(
+            QQ_LIKE_MOBILE_RUNTIME_DIR
+            / "debian-trixie-arm64-20260713.tar.gz"
+        ),
+    )
+).expanduser()
+QQ_LIKE_MOBILE_RUNTIME_CACHE: Dict[str, object] = {}
 QQ_LIKE_WEBUI_PORT = _env_int("QQ_LIKE_WEBUI_PORT", 16199, 1024, 65535)
 QQ_LIKE_ONEBOT_PORT = _env_int("QQ_LIKE_ONEBOT_PORT", 16100, 1024, 65535)
 QQ_LIKE_MAX_CONTRIBUTORS = _env_int(
@@ -333,6 +349,36 @@ def qq_like_mobile_release() -> Optional[dict]:
     QQ_LIKE_MOBILE_RELEASE_CACHE.clear()
     QQ_LIKE_MOBILE_RELEASE_CACHE[cache_key] = dict(release)
     return release
+
+
+def qq_like_mobile_runtime_rootfs() -> Optional[dict]:
+    """读取手机端 Debian 基础环境文件并计算校验信息。"""
+    rootfs_path = QQ_LIKE_MOBILE_RUNTIME_ROOTFS_PATH
+    if not rootfs_path.is_file():
+        return None
+
+    rootfs_stat = rootfs_path.stat()
+    cache_key = f"{rootfs_stat.st_mtime_ns}:{rootfs_stat.st_size}"
+    cached = QQ_LIKE_MOBILE_RUNTIME_CACHE.get(cache_key)
+    if isinstance(cached, dict):
+        return dict(cached)
+
+    digest = hashlib.sha256()
+    with rootfs_path.open("rb") as rootfs_file:
+        while True:
+            chunk = rootfs_file.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+
+    runtime = {
+        "sha256": digest.hexdigest(),
+        "size_bytes": int(rootfs_stat.st_size),
+        "filename": rootfs_path.name,
+    }
+    QQ_LIKE_MOBILE_RUNTIME_CACHE.clear()
+    QQ_LIKE_MOBILE_RUNTIME_CACHE[cache_key] = dict(runtime)
+    return runtime
 DEVICE_BIND_QR_ENV = os.environ.get("DEVICE_BIND_QR_PATH", "").strip()
 DEVICE_BIND_QR_TOKEN_TTL_SECONDS = 120
 DEVICE_BIND_QR_UNAVAILABLE_MESSAGE = "当前二维码有设备未解绑，暂时不能使用，请联系管理员。"
@@ -9628,33 +9674,107 @@ def _run_http_server(
                 )
                 return
 
-            filename = urllib.parse.quote(
-                f"互赞助手-{release['version_name']}.apk"
+            self._download_qq_like_mobile_file(
+                QQ_LIKE_MOBILE_RELEASE_APK_PATH,
+                content_type="application/vnd.android.package-archive",
+                filename=f"互赞助手-{release['version_name']}.apk",
+                etag=str(release["sha256"]),
+                cache_control="public, max-age=300",
             )
-            self.send_response(200)
-            self.send_header(
-                "Content-Type",
-                "application/vnd.android.package-archive",
+
+        def _download_qq_like_mobile_runtime_rootfs(self) -> None:
+            headers = self._qq_like_headers()
+            if self.command != "GET":
+                self._json_response(
+                    {"status": "failed", "error": "请使用 GET 下载运行环境"},
+                    status=405,
+                    headers=headers,
+                )
+                return
+            try:
+                runtime = qq_like_mobile_runtime_rootfs()
+            except OSError:
+                runtime = None
+            if runtime is None:
+                self._json_response(
+                    {"status": "failed", "error": "运行环境文件暂不可用"},
+                    status=404,
+                    headers=headers,
+                )
+                return
+            self._download_qq_like_mobile_file(
+                QQ_LIKE_MOBILE_RUNTIME_ROOTFS_PATH,
+                content_type="application/gzip",
+                filename=str(runtime["filename"]),
+                etag=str(runtime["sha256"]),
+                cache_control="public, max-age=86400, immutable",
             )
+
+        def _download_qq_like_mobile_file(
+            self,
+            file_path: Path,
+            *,
+            content_type: str,
+            filename: str,
+            etag: str,
+            cache_control: str,
+        ) -> None:
+            """发送可断点续传的手机端静态文件。"""
+            file_size = file_path.stat().st_size
+            start = 0
+            end = max(0, file_size - 1)
+            status = 200
+            range_header = (self.headers.get("Range") or "").strip()
+            if range_header:
+                match = re.fullmatch(r"bytes=(\d+)-(\d*)", range_header)
+                if match is None:
+                    self.send_response(416)
+                    self.send_header("Content-Range", f"bytes */{file_size}")
+                    self.end_headers()
+                    return
+                start = int(match.group(1))
+                end = (
+                    int(match.group(2))
+                    if match.group(2)
+                    else max(0, file_size - 1)
+                )
+                if start >= file_size or end < start:
+                    self.send_response(416)
+                    self.send_header("Content-Range", f"bytes */{file_size}")
+                    self.end_headers()
+                    return
+                end = min(end, file_size - 1)
+                status = 206
+
+            encoded_filename = urllib.parse.quote(filename)
+            content_length = max(0, end - start + 1)
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
             self.send_header(
                 "Content-Disposition",
-                f"attachment; filename*=UTF-8''{filename}",
+                f"attachment; filename*=UTF-8''{encoded_filename}",
             )
-            self.send_header(
-                "Content-Length",
-                str(release["size_bytes"]),
-            )
-            self.send_header("Cache-Control", "public, max-age=300")
-            self.send_header("ETag", f"\"{release['sha256']}\"")
+            self.send_header("Content-Length", str(content_length))
+            self.send_header("Accept-Ranges", "bytes")
+            if status == 206:
+                self.send_header(
+                    "Content-Range",
+                    f"bytes {start}-{end}/{file_size}",
+                )
+            self.send_header("Cache-Control", cache_control)
+            self.send_header("ETag", f"\"{etag}\"")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.end_headers()
             try:
-                with QQ_LIKE_MOBILE_RELEASE_APK_PATH.open("rb") as apk_file:
-                    while True:
-                        chunk = apk_file.read(1024 * 1024)
+                with file_path.open("rb") as source_file:
+                    source_file.seek(start)
+                    remaining = content_length
+                    while remaining > 0:
+                        chunk = source_file.read(min(1024 * 1024, remaining))
                         if not chunk:
                             break
                         self.wfile.write(chunk)
+                        remaining -= len(chunk)
             except (BrokenPipeError, ConnectionResetError):
                 return
 
@@ -9671,6 +9791,9 @@ def _run_http_server(
                 return True
             if path == f"{mobile_prefix}app/apk":
                 self._download_qq_like_mobile_apk()
+                return True
+            if path == f"{mobile_prefix}runtime/debian-arm64-rootfs":
+                self._download_qq_like_mobile_runtime_rootfs()
                 return True
             if not self._qq_like_mobile_available():
                 return True
