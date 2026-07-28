@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">互赞助手</string>
+    <string name="check_update">检查更新</string>
+    <string name="preparing_runtime">正在准备运行环境</string>
+    <string name="preparing_runtime_detail">正在检查初始化状态</string>
+    <string name="preparing_runtime_meta">请保持 App 在前台</string>
     <string name="page_title">QQ 登录</string>
     <string name="page_subtitle">扫码登录后开始互赞</string>
     <string name="account_title">QQ 账号</string>

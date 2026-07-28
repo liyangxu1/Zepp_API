@@ -218,6 +218,7 @@ QQ_LIKE_MOBILE_DB_PATH="/data/qq-like-tool/qq_like_mobile.sqlite3"
 QQ_LIKE_MOBILE_MAX_BATCH_SIZE="8"
 QQ_LIKE_MOBILE_LEASE_SECONDS="600"
 QQ_LIKE_MOBILE_LIKES_PER_TARGET="10"
+QQ_LIKE_MOBILE_RELEASE_DIR="/data/web/zepp-api-python/.qq-like-releases"
 ```
 
 运行约束：
@@ -241,6 +242,17 @@ POST /api/admin/qq-like/mobile/accounts/action
 `/admin` 可以维护白名单、查看当天活跃账号和任务明细、停用账号及重置设备
 绑定。完整 QQ 号只在已认证后台返回。
 
+App 更新接口不需要 QQ 登录或任务凭证：
+
+```text
+GET /api/tools/qq-like/mobile/app/update?current_version_code=1003
+GET /api/tools/qq-like/mobile/app/apk
+```
+
+发布目录包含 `latest.json` 与 `latest.apk`。服务端按 APK 实际内容计算
+SHA-256 和文件大小并返回给 App；App 下载完成后必须同时校验大小和 SHA-256，
+校验通过才会打开 Android 系统安装确认页。
+
 #### Android 登录助手
 
 `android-app/` 的用户界面只展示 QQ 扫码登录、当前账号、今日互赞和任务
@@ -248,6 +260,11 @@ POST /api/admin/qq-like/mobile/accounts/action
 主流程中。扫码页使用原生二维码界面，不再展示 NapCat WebUI。QQ 在线后 App
 自动注册和心跳；用户主动点击“开始互赞”后，App 分批领取当天全部任务，并通过只监听
 `127.0.0.1:3000` 的本机 OneBot 严格串行执行 `send_like`。
+
+App 每次启动会自动检查工具网版本，主页也保留手动“检查更新”入口。发现新
+版本后自动下载并显示百分比，首次更新需按 Android 要求允许安装未知应用并在
+系统页面确认安装。Termux bootstrap 解压和 NapCat 官方安装流程都会展示阶段
+进度，不再只显示无限转圈或隐藏日志。
 
 第一版仅支持前台手动同步，不包含后台 Service、定时任务或开机常驻。App
 不会把 QQ 会话、Cookie、扫码信息、NapCat 配置或 OneBot token 上传到服务器。

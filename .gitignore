@@ -10,6 +10,7 @@ baidu_share_downloads/
 baidu_speed_tests/
 .baidupcs/
 .qq-like-data/
+.qq-like-releases/
 android-app/.gradle/
 android-app/build/
 android-app/app/build/

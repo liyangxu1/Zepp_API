@@ -14,37 +14,38 @@ import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.provider.Settings;
+import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import java.io.File;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /** NapCat 官方 Termux 运行链路的最小控制页面。 */
 public final class MainActivity extends Activity {
     private static final int REQUEST_RUN_COMMAND = 2001;
-    private static final String OFFICIAL_INSTALL_SCRIPT =
-        "https://raw.githubusercontent.com/NapNeko/NapCat-Installer/"
-            + "main/script/install.termux.sh";
-    private static final String OFFICIAL_LINUX_INSTALL_SCRIPT =
-        "https://raw.githubusercontent.com/NapNeko/NapCat-Installer/"
-            + "main/script/install.sh";
-    private static final String DOCUMENT_MIRROR_LINUX_INSTALL_SCRIPT =
-        "https://nclatest.znin.net/NapNeko/NapCat-Installer/main/script/install.sh";
-    private static final String INSTALL_COMMAND =
-        "curl -fL --retry 3 -o \"$HOME/napcat.termux.sh\" " + OFFICIAL_INSTALL_SCRIPT
-            + " && sed -i 's#" + DOCUMENT_MIRROR_LINUX_INSTALL_SCRIPT
-            + "#" + OFFICIAL_LINUX_INSTALL_SCRIPT + "#g' \"$HOME/napcat.termux.sh\""
-            + " && bash \"$HOME/napcat.termux.sh\"";
+    private static final String UPDATE_PREFERENCES = "app_update";
+    private static final String KEY_PENDING_UPDATE_PATH = "pending_update_path";
+    private static final String INITIALIZATION_PREFERENCES =
+        "initialization_progress";
+    private static final String KEY_INITIALIZATION_RUNNING =
+        "initialization_running";
+    private static final long INITIALIZATION_POLL_INTERVAL_MS = 1200L;
     private static final String FIND_NAPCAT_PIDS_COMMAND =
         "napcat_pids='';"
             + " for proc_path in /proc/[0-9]*; do"
@@ -118,11 +119,19 @@ public final class MainActivity extends Activity {
     private TextView completedCount;
     private TextView abnormalCount;
     private TextView taskRecordText;
+    private TextView versionText;
+    private TextView operationProgressTitle;
+    private TextView operationProgressPercent;
+    private TextView operationProgressDetail;
+    private TextView operationProgressMeta;
+    private ProgressBar operationProgressBar;
+    private View operationProgressCard;
     private EditText serverUrlInput;
     private Button primaryButton;
     private Button loginButton;
     private Button oneBotButton;
     private Button mutualLikeButton;
+    private Button checkUpdateButton;
     private boolean environmentReady;
     private boolean runtimeRunning;
     private boolean qqLoggedIn;
@@ -134,13 +143,20 @@ public final class MainActivity extends Activity {
         new AtomicBoolean(false);
     private final AtomicBoolean registrationRunning =
         new AtomicBoolean(false);
+    private final AtomicBoolean updateCheckRunning =
+        new AtomicBoolean(false);
+    private final Handler progressHandler =
+        new Handler(Looper.getMainLooper());
+    private boolean initializationProbeRunning;
+    private final Runnable initializationProgressPoll =
+        this::probeInitializationProgress;
     private final ExecutorService networkExecutor =
         Executors.newSingleThreadExecutor();
 
     private final BroadcastReceiver resultReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
-            renderLastResult();
+            renderCommandResult(intent);
         }
     };
 
@@ -150,6 +166,8 @@ public final class MainActivity extends Activity {
         setContentView(R.layout.activity_main);
         bindViews();
         bindActions();
+        versionText.setText("v" + getAppVersion());
+        checkForUpdates(false);
     }
 
     @Override
@@ -169,6 +187,8 @@ public final class MainActivity extends Activity {
         if (mutualLikeCancellation != null) {
             mutualLikeCancellation.set(true);
         }
+        progressHandler.removeCallbacks(initializationProgressPoll);
+        initializationProbeRunning = false;
         unregisterReceiver(resultReceiver);
         super.onStop();
     }
@@ -186,6 +206,8 @@ public final class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         refreshLocalState();
+        resumePendingUpdateInstall();
+        resumeInitializationProgress();
     }
 
     private void bindViews() {
@@ -200,11 +222,19 @@ public final class MainActivity extends Activity {
         completedCount = findViewById(R.id.completedCount);
         abnormalCount = findViewById(R.id.abnormalCount);
         taskRecordText = findViewById(R.id.taskRecordText);
+        versionText = findViewById(R.id.versionText);
+        operationProgressTitle = findViewById(R.id.operationProgressTitle);
+        operationProgressPercent = findViewById(R.id.operationProgressPercent);
+        operationProgressDetail = findViewById(R.id.operationProgressDetail);
+        operationProgressMeta = findViewById(R.id.operationProgressMeta);
+        operationProgressBar = findViewById(R.id.operationProgressBar);
+        operationProgressCard = findViewById(R.id.operationProgressCard);
         serverUrlInput = findViewById(R.id.serverUrlInput);
         primaryButton = findViewById(R.id.primaryButton);
         loginButton = findViewById(R.id.loginButton);
         oneBotButton = findViewById(R.id.oneBotButton);
         mutualLikeButton = findViewById(R.id.mutualLikeButton);
+        checkUpdateButton = findViewById(R.id.checkUpdateButton);
         serverUrlInput.setText(AppSettings.getServerUrl(this));
     }
 
@@ -215,6 +245,9 @@ public final class MainActivity extends Activity {
         findViewById(R.id.termuxButton).setOnClickListener(view -> openTermux());
         oneBotButton.setOnClickListener(view -> confirmConfigureOneBot());
         mutualLikeButton.setOnClickListener(view -> beginMutualLikeSync());
+        checkUpdateButton.setOnClickListener(
+            view -> checkForUpdates(true)
+        );
     }
 
     private void refreshLocalState() {
@@ -342,12 +375,119 @@ public final class MainActivity extends Activity {
         appendLog("开始执行 NapCat 官方 Termux 安装脚本。");
         openLoginWhenReady = true;
         primaryButton.setEnabled(false);
+        setInitializationRunning(true);
+        showOperationProgress(
+            "正在准备运行环境",
+            1,
+            "正在启动 NapCat 官方安装流程",
+            "阶段 1/5 · 请保持 App 在前台"
+        );
         try {
-            TermuxBridge.run(this, "install", INSTALL_COMMAND, true);
-        } catch (RuntimeException error) {
+            TermuxBridge.run(
+                this,
+                "install",
+                InitializationProgress.installCommand(this),
+                true
+            );
+            scheduleInitializationProgressPoll(300);
+        } catch (RuntimeException | java.io.IOException error) {
+            setInitializationRunning(false);
             primaryButton.setEnabled(true);
             handleCommandStartError(error);
         }
+    }
+
+    private void resumeInitializationProgress() {
+        boolean running = getSharedPreferences(
+            INITIALIZATION_PREFERENCES,
+            MODE_PRIVATE
+        ).getBoolean(KEY_INITIALIZATION_RUNNING, false);
+        if (!running
+            || !TermuxBridge.isInstalled(this)
+            || !TermuxBridge.hasRunPermission(this)) {
+            return;
+        }
+        showOperationProgress(
+            "正在准备运行环境",
+            1,
+            "正在恢复初始化进度",
+            "请保持 App 在前台"
+        );
+        scheduleInitializationProgressPoll(100);
+    }
+
+    private void setInitializationRunning(boolean running) {
+        getSharedPreferences(INITIALIZATION_PREFERENCES, MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_INITIALIZATION_RUNNING, running)
+            .apply();
+    }
+
+    private void scheduleInitializationProgressPoll(long delayMillis) {
+        progressHandler.removeCallbacks(initializationProgressPoll);
+        progressHandler.postDelayed(
+            initializationProgressPoll,
+            Math.max(0, delayMillis)
+        );
+    }
+
+    private void probeInitializationProgress() {
+        if (initializationProbeRunning
+            || !TermuxBridge.isInstalled(this)
+            || !TermuxBridge.hasRunPermission(this)) {
+            return;
+        }
+        initializationProbeRunning = true;
+        try {
+            TermuxBridge.run(
+                this,
+                "install_progress",
+                InitializationProgress.probeCommand(),
+                true
+            );
+        } catch (RuntimeException error) {
+            initializationProbeRunning = false;
+            scheduleInitializationProgressPoll(
+                INITIALIZATION_POLL_INTERVAL_MS
+            );
+        }
+    }
+
+    private void renderInitializationProgress(
+        InitializationProgress.Status status
+    ) {
+        if (status.isRunning()) {
+            showOperationProgress(
+                status.stage,
+                status.percent,
+                status.detail,
+                "初始化期间可以看到当前阶段和总体进度"
+            );
+            scheduleInitializationProgressPoll(
+                INITIALIZATION_POLL_INTERVAL_MS
+            );
+            return;
+        }
+        if (status.isDone()) {
+            setInitializationRunning(false);
+            showOperationProgress(
+                status.stage,
+                100,
+                status.detail,
+                "正在检查 NapCat 运行状态"
+            );
+            probeRuntime();
+            return;
+        }
+        if (status.isFailed()) {
+            setInitializationRunning(false);
+            showOperationFailure(status.stage, status.detail);
+            primaryButton.setEnabled(true);
+            return;
+        }
+        scheduleInitializationProgressPoll(
+            INITIALIZATION_POLL_INTERVAL_MS
+        );
     }
 
     private void startNapCat(boolean restart) {
@@ -423,22 +563,46 @@ public final class MainActivity extends Activity {
         }
     }
 
-    private void handleCommandStartError(RuntimeException error) {
+    private void handleCommandStartError(Exception error) {
         appendLog("Termux 命令启动失败：" + safeMessage(error));
         showTermuxSetupDialog();
     }
 
-    private void renderLastResult() {
+    private void renderCommandResult(Intent resultIntent) {
         SharedPreferences preferences = getSharedPreferences(
             TermuxResultService.PREFERENCES,
             MODE_PRIVATE
         );
-        String operation = preferences.getString("last_operation", "");
-        String stdout = preferences.getString("last_stdout", "");
-        String stderr = preferences.getString("last_stderr", "");
-        String error = preferences.getString("last_error", "");
-        int exitCode = preferences.getInt("last_exit_code", -1);
+        boolean hasBroadcastResult = resultIntent != null
+            && resultIntent.hasExtra(TermuxResultService.EXTRA_OPERATION);
+        String operation = hasBroadcastResult
+            ? resultIntent.getStringExtra(TermuxResultService.EXTRA_OPERATION)
+            : preferences.getString("last_operation", "");
+        String stdout = hasBroadcastResult
+            ? resultIntent.getStringExtra(TermuxResultService.EXTRA_STDOUT)
+            : preferences.getString("last_stdout", "");
+        String stderr = hasBroadcastResult
+            ? resultIntent.getStringExtra(TermuxResultService.EXTRA_STDERR)
+            : preferences.getString("last_stderr", "");
+        String error = hasBroadcastResult
+            ? resultIntent.getStringExtra(TermuxResultService.EXTRA_ERROR)
+            : preferences.getString("last_error", "");
+        int exitCode = hasBroadcastResult
+            ? resultIntent.getIntExtra(TermuxResultService.EXTRA_EXIT_CODE, -1)
+            : preferences.getInt("last_exit_code", -1);
+        operation = operation == null ? "" : operation;
+        stdout = stdout == null ? "" : stdout;
+        stderr = stderr == null ? "" : stderr;
+        error = error == null ? "" : error;
         primaryButton.setEnabled(true);
+
+        if ("install_progress".equals(operation)) {
+            initializationProbeRunning = false;
+            renderInitializationProgress(
+                InitializationProgress.parse(stdout)
+            );
+            return;
+        }
 
         if (!"webui".equals(operation)
             && !"onebot_config".equals(operation)
@@ -457,7 +621,23 @@ public final class MainActivity extends Activity {
             runtimeRunning = stdout.contains("RUNTIME_RUNNING=1");
             renderRuntimeState();
         } else if ("install".equals(operation)) {
-            appendLog(exitCode == 0 ? "官方安装脚本执行完成。" : "安装未完成，请查看 Termux 输出。");
+            setInitializationRunning(false);
+            progressHandler.removeCallbacks(initializationProgressPoll);
+            if (exitCode == 0) {
+                showOperationProgress(
+                    "运行环境准备完成",
+                    100,
+                    "NapCat 官方安装脚本执行完成",
+                    "正在检查运行状态"
+                );
+                appendLog("官方安装脚本执行完成。");
+            } else {
+                showOperationFailure(
+                    "运行环境准备失败",
+                    "安装未完成，请检查网络后重试"
+                );
+                appendLog("安装未完成，请查看 Termux 输出。");
+            }
             probeRuntime();
         } else if ("start".equals(operation)) {
             appendLog(exitCode == 0 ? "NapCat 启动命令已提交。" : "NapCat 启动失败。");
@@ -824,6 +1004,264 @@ public final class MainActivity extends Activity {
         return "正在同步今日任务…";
     }
 
+    private void checkForUpdates(boolean manual) {
+        if (!updateCheckRunning.compareAndSet(false, true)) {
+            return;
+        }
+        checkUpdateButton.setEnabled(false);
+        checkUpdateButton.setText("检查中…");
+        String serverUrl = AppSettings.getServerUrl(this);
+        networkExecutor.execute(() -> {
+            try {
+                AppUpdateClient client = new AppUpdateClient(serverUrl);
+                AppUpdateClient.CheckResult result = client.check(
+                    getAppVersionCode(),
+                    getAppVersion()
+                );
+                runOnUiThread(() -> {
+                    updateCheckRunning.set(false);
+                    checkUpdateButton.setEnabled(true);
+                    checkUpdateButton.setText("检查更新");
+                    if (result.available && result.release != null) {
+                        versionText.setText(
+                            "v" + getAppVersion()
+                                + " · 可更新 "
+                                + result.release.versionName
+                        );
+                        showUpdateDialog(result.release);
+                    } else {
+                        versionText.setText("v" + getAppVersion() + " · 已是最新");
+                        if (manual) {
+                            Toast.makeText(
+                                this,
+                                "当前已是最新版本",
+                                Toast.LENGTH_SHORT
+                            ).show();
+                        }
+                    }
+                });
+            } catch (Exception error) {
+                runOnUiThread(() -> {
+                    updateCheckRunning.set(false);
+                    checkUpdateButton.setEnabled(true);
+                    checkUpdateButton.setText("检查更新");
+                    versionText.setText("v" + getAppVersion());
+                    if (manual) {
+                        Toast.makeText(
+                            this,
+                            "检查更新失败：" + safeMessage(error),
+                            Toast.LENGTH_LONG
+                        ).show();
+                    }
+                    appendLog("检查更新失败：" + safeMessage(error));
+                });
+            }
+        });
+    }
+
+    private void showUpdateDialog(AppUpdateClient.Release release) {
+        StringBuilder message = new StringBuilder()
+            .append("当前版本：")
+            .append(getAppVersion())
+            .append("\n最新版本：")
+            .append(release.versionName);
+        if (!release.changelog.isEmpty()) {
+            message.append("\n\n");
+            for (String item : release.changelog) {
+                message.append("• ").append(item).append("\n");
+            }
+        }
+        message.append("\n下载后会打开 Android 系统安装确认页。");
+        AlertDialog.Builder builder = new AlertDialog.Builder(this)
+            .setTitle(release.title)
+            .setMessage(message.toString().trim())
+            .setPositiveButton(
+                "下载更新",
+                (dialog, which) -> downloadUpdate(release)
+            );
+        if (!release.forceUpdate) {
+            builder.setNegativeButton("稍后", null);
+        }
+        AlertDialog dialog = builder.create();
+        dialog.setCancelable(!release.forceUpdate);
+        dialog.setCanceledOnTouchOutside(!release.forceUpdate);
+        dialog.show();
+    }
+
+    private void downloadUpdate(AppUpdateClient.Release release) {
+        checkUpdateButton.setEnabled(false);
+        showOperationProgress(
+            "正在下载 App 更新",
+            0,
+            "准备下载互赞助手 " + release.versionName,
+            "0 B / " + formatBytes(release.sizeBytes)
+        );
+        AtomicInteger lastProgress = new AtomicInteger(-1);
+        String serverUrl = AppSettings.getServerUrl(this);
+        networkExecutor.execute(() -> {
+            try {
+                AppUpdateClient client = new AppUpdateClient(serverUrl);
+                File apk = client.download(
+                    getApplicationContext(),
+                    release,
+                    (downloadedBytes, totalBytes) -> {
+                        int percent = totalBytes <= 0
+                            ? 0
+                            : (int) Math.min(
+                                99,
+                                downloadedBytes * 100L / totalBytes
+                            );
+                        if (lastProgress.getAndSet(percent) == percent) {
+                            return;
+                        }
+                        runOnUiThread(() -> showOperationProgress(
+                            "正在下载 App 更新",
+                            percent,
+                            "正在下载互赞助手 " + release.versionName,
+                            formatBytes(downloadedBytes)
+                                + " / "
+                                + formatBytes(totalBytes)
+                        ));
+                    }
+                );
+                runOnUiThread(() -> {
+                    checkUpdateButton.setEnabled(true);
+                    showOperationProgress(
+                        "更新包已准备好",
+                        100,
+                        "安全校验已通过",
+                        "接下来由 Android 系统确认安装"
+                    );
+                    requestUpdateInstall(apk);
+                });
+            } catch (Exception error) {
+                runOnUiThread(() -> {
+                    checkUpdateButton.setEnabled(true);
+                    showOperationFailure(
+                        "App 更新失败",
+                        safeMessage(error)
+                    );
+                    Toast.makeText(
+                        this,
+                        "更新失败：" + safeMessage(error),
+                        Toast.LENGTH_LONG
+                    ).show();
+                });
+            }
+        });
+    }
+
+    private void requestUpdateInstall(File apk) {
+        savePendingUpdatePath(apk);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+            && !getPackageManager().canRequestPackageInstalls()) {
+            new AlertDialog.Builder(this)
+                .setTitle("允许安装 App 更新")
+                .setMessage(
+                    "Android 要求首次更新时允许本 App 安装更新包。"
+                        + "开启后返回，系统会继续显示安装确认页。"
+                )
+                .setPositiveButton(
+                    "去开启",
+                    (dialog, which) -> openUnknownSourceSettings()
+                )
+                .setNegativeButton("稍后", null)
+                .show();
+            return;
+        }
+        startUpdateInstaller(apk);
+    }
+
+    private void openUnknownSourceSettings() {
+        try {
+            Intent intent = new Intent(
+                Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                Uri.parse("package:" + getPackageName())
+            );
+            startActivity(intent);
+        } catch (RuntimeException error) {
+            Toast.makeText(
+                this,
+                "请在系统设置中允许本 App 安装未知应用",
+                Toast.LENGTH_LONG
+            ).show();
+        }
+    }
+
+    private void resumePendingUpdateInstall() {
+        SharedPreferences preferences = getSharedPreferences(
+            UPDATE_PREFERENCES,
+            MODE_PRIVATE
+        );
+        String path = preferences.getString(KEY_PENDING_UPDATE_PATH, "");
+        if (path == null || path.trim().isEmpty()) {
+            return;
+        }
+        File apk = new File(path);
+        if (!apk.isFile()) {
+            preferences.edit().remove(KEY_PENDING_UPDATE_PATH).apply();
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+            && !getPackageManager().canRequestPackageInstalls()) {
+            return;
+        }
+        startUpdateInstaller(apk);
+    }
+
+    private void savePendingUpdatePath(File apk) {
+        getSharedPreferences(UPDATE_PREFERENCES, MODE_PRIVATE)
+            .edit()
+            .putString(KEY_PENDING_UPDATE_PATH, apk.getAbsolutePath())
+            .apply();
+    }
+
+    private void startUpdateInstaller(File apk) {
+        try {
+            Uri uri = UpdateFileProvider.uriFor(this, apk);
+            Intent intent = new Intent(Intent.ACTION_VIEW);
+            intent.setDataAndType(
+                uri,
+                "application/vnd.android.package-archive"
+            );
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivity(intent);
+            getSharedPreferences(UPDATE_PREFERENCES, MODE_PRIVATE)
+                .edit()
+                .remove(KEY_PENDING_UPDATE_PATH)
+                .apply();
+        } catch (RuntimeException error) {
+            showOperationFailure(
+                "无法打开系统安装器",
+                safeMessage(error)
+            );
+        }
+    }
+
+    private void showOperationProgress(
+        String title,
+        int percent,
+        String detail,
+        String meta
+    ) {
+        int safePercent = Math.max(0, Math.min(100, percent));
+        operationProgressCard.setVisibility(View.VISIBLE);
+        operationProgressTitle.setText(title);
+        operationProgressPercent.setText(safePercent + "%");
+        operationProgressDetail.setText(detail);
+        operationProgressMeta.setText(meta);
+        operationProgressBar.setProgress(safePercent);
+    }
+
+    private void showOperationFailure(String title, String detail) {
+        operationProgressCard.setVisibility(View.VISIBLE);
+        operationProgressTitle.setText(title);
+        operationProgressPercent.setText("失败");
+        operationProgressDetail.setText(detail);
+        operationProgressMeta.setText("请检查网络后重试");
+        operationProgressBar.setProgress(0);
+    }
+
     private String getAppVersion() {
         try {
             return getPackageManager()
@@ -832,6 +1270,38 @@ public final class MainActivity extends Activity {
         } catch (PackageManager.NameNotFoundException error) {
             return "unknown";
         }
+    }
+
+    private int getAppVersionCode() {
+        try {
+            android.content.pm.PackageInfo info = getPackageManager()
+                .getPackageInfo(getPackageName(), 0);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                return (int) Math.min(
+                    Integer.MAX_VALUE,
+                    info.getLongVersionCode()
+                );
+            }
+            return info.versionCode;
+        } catch (PackageManager.NameNotFoundException error) {
+            return 0;
+        }
+    }
+
+    private String formatBytes(long bytes) {
+        if (bytes <= 0) {
+            return "0 B";
+        }
+        double value = bytes;
+        String[] units = {"B", "KB", "MB", "GB"};
+        int unit = 0;
+        while (value >= 1024 && unit < units.length - 1) {
+            value /= 1024;
+            unit++;
+        }
+        return unit == 0
+            ? String.format(Locale.getDefault(), "%.0f %s", value, units[unit])
+            : String.format(Locale.getDefault(), "%.1f %s", value, units[unit]);
     }
 
     private String maskQq(String qq) {

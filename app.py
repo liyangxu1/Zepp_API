@@ -229,6 +229,25 @@ QQ_LIKE_MOBILE_DB_PATH = Path(
         str(QQ_LIKE_DATA_ROOT / "qq_like_mobile.sqlite3"),
     )
 ).expanduser()
+QQ_LIKE_MOBILE_RELEASE_DIR = Path(
+    os.environ.get(
+        "QQ_LIKE_MOBILE_RELEASE_DIR",
+        str(Path(__file__).with_name(".qq-like-releases")),
+    )
+).expanduser()
+QQ_LIKE_MOBILE_RELEASE_MANIFEST_PATH = Path(
+    os.environ.get(
+        "QQ_LIKE_MOBILE_RELEASE_MANIFEST_PATH",
+        str(QQ_LIKE_MOBILE_RELEASE_DIR / "latest.json"),
+    )
+).expanduser()
+QQ_LIKE_MOBILE_RELEASE_APK_PATH = Path(
+    os.environ.get(
+        "QQ_LIKE_MOBILE_RELEASE_APK_PATH",
+        str(QQ_LIKE_MOBILE_RELEASE_DIR / "latest.apk"),
+    )
+).expanduser()
+QQ_LIKE_MOBILE_RELEASE_CACHE: Dict[str, object] = {}
 QQ_LIKE_WEBUI_PORT = _env_int("QQ_LIKE_WEBUI_PORT", 16199, 1024, 65535)
 QQ_LIKE_ONEBOT_PORT = _env_int("QQ_LIKE_ONEBOT_PORT", 16100, 1024, 65535)
 QQ_LIKE_MAX_CONTRIBUTORS = _env_int(
@@ -261,6 +280,59 @@ QQ_LIKE_MOBILE_LIKES_PER_TARGET = _env_int(
     1,
     10,
 )
+
+
+def qq_like_mobile_release() -> Optional[dict]:
+    """读取当前 App 发布清单，并补齐 APK 的校验信息。"""
+    manifest_path = QQ_LIKE_MOBILE_RELEASE_MANIFEST_PATH
+    apk_path = QQ_LIKE_MOBILE_RELEASE_APK_PATH
+    if not manifest_path.is_file() or not apk_path.is_file():
+        return None
+
+    manifest_stat = manifest_path.stat()
+    apk_stat = apk_path.stat()
+    cache_key = (
+        f"{manifest_stat.st_mtime_ns}:{manifest_stat.st_size}:"
+        f"{apk_stat.st_mtime_ns}:{apk_stat.st_size}"
+    )
+    cached = QQ_LIKE_MOBILE_RELEASE_CACHE.get(cache_key)
+    if isinstance(cached, dict):
+        return dict(cached)
+
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    version_code = int(payload.get("version_code") or 0)
+    version_name = str(payload.get("version_name") or "").strip()
+    if version_code <= 0 or not version_name:
+        raise ValueError("App 发布清单缺少有效版本号")
+
+    digest = hashlib.sha256()
+    with apk_path.open("rb") as apk_file:
+        while True:
+            chunk = apk_file.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+
+    changelog = payload.get("changelog")
+    if not isinstance(changelog, list):
+        changelog = []
+    release = {
+        "version_code": version_code,
+        "version_name": version_name,
+        "title": str(payload.get("title") or "发现新版本").strip(),
+        "changelog": [
+            str(item).strip()
+            for item in changelog
+            if str(item).strip()
+        ][:20],
+        "force_update": bool(payload.get("force_update", False)),
+        "sha256": digest.hexdigest(),
+        "size_bytes": int(apk_stat.st_size),
+        "download_url": "/api/tools/qq-like/mobile/app/apk",
+    }
+    QQ_LIKE_MOBILE_RELEASE_CACHE.clear()
+    QQ_LIKE_MOBILE_RELEASE_CACHE[cache_key] = dict(release)
+    return release
 DEVICE_BIND_QR_ENV = os.environ.get("DEVICE_BIND_QR_PATH", "").strip()
 DEVICE_BIND_QR_TOKEN_TTL_SECONDS = 120
 DEVICE_BIND_QR_UNAVAILABLE_MESSAGE = "当前二维码有设备未解绑，暂时不能使用，请联系管理员。"
@@ -9483,6 +9555,109 @@ def _run_http_server(
                 headers=self._qq_like_headers(),
             )
 
+        def _handle_qq_like_mobile_update(
+            self,
+            params: Dict[str, str],
+        ) -> None:
+            headers = self._qq_like_headers()
+            if self.command != "GET":
+                self._json_response(
+                    {"status": "failed", "error": "请使用 GET 检查更新"},
+                    status=405,
+                    headers=headers,
+                )
+                return
+            try:
+                current_version_code = int(
+                    params.get("current_version_code", "0") or "0"
+                )
+            except ValueError:
+                current_version_code = 0
+            try:
+                release = qq_like_mobile_release()
+            except (OSError, ValueError, json.JSONDecodeError):
+                self._json_response(
+                    {
+                        "status": "failed",
+                        "error": "App 更新信息暂不可用",
+                    },
+                    status=503,
+                    headers=headers,
+                )
+                return
+            if release is None:
+                self._json_response(
+                    {
+                        "status": "success",
+                        "available": False,
+                        "release": None,
+                    },
+                    headers=headers,
+                )
+                return
+            self._json_response(
+                {
+                    "status": "success",
+                    "available": (
+                        int(release["version_code"])
+                        > max(0, current_version_code)
+                    ),
+                    "release": release,
+                },
+                headers=headers,
+            )
+
+        def _download_qq_like_mobile_apk(self) -> None:
+            headers = self._qq_like_headers()
+            if self.command != "GET":
+                self._json_response(
+                    {"status": "failed", "error": "请使用 GET 下载 APK"},
+                    status=405,
+                    headers=headers,
+                )
+                return
+            try:
+                release = qq_like_mobile_release()
+            except (OSError, ValueError, json.JSONDecodeError):
+                release = None
+            if release is None:
+                self._json_response(
+                    {"status": "failed", "error": "当前没有可下载的 App 版本"},
+                    status=404,
+                    headers=headers,
+                )
+                return
+
+            filename = urllib.parse.quote(
+                f"互赞助手-{release['version_name']}.apk"
+            )
+            self.send_response(200)
+            self.send_header(
+                "Content-Type",
+                "application/vnd.android.package-archive",
+            )
+            self.send_header(
+                "Content-Disposition",
+                f"attachment; filename*=UTF-8''{filename}",
+            )
+            self.send_header(
+                "Content-Length",
+                str(release["size_bytes"]),
+            )
+            self.send_header("Cache-Control", "public, max-age=300")
+            self.send_header("ETag", f"\"{release['sha256']}\"")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            try:
+                with QQ_LIKE_MOBILE_RELEASE_APK_PATH.open("rb") as apk_file:
+                    while True:
+                        chunk = apk_file.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+            except (BrokenPipeError, ConnectionResetError):
+                return
+
         def _handle_qq_like_mobile(
             self,
             path: str,
@@ -9491,6 +9666,12 @@ def _run_http_server(
             mobile_prefix = "/api/tools/qq-like/mobile/"
             if not path.startswith(mobile_prefix):
                 return False
+            if path == f"{mobile_prefix}app/update":
+                self._handle_qq_like_mobile_update(params)
+                return True
+            if path == f"{mobile_prefix}app/apk":
+                self._download_qq_like_mobile_apk()
+                return True
             if not self._qq_like_mobile_available():
                 return True
             headers = self._qq_like_headers()

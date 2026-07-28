@@ -16,6 +16,10 @@ App 按 NapCat 官方 Android/Termux 路径完成：
 6. QQ 在线后自动向任务服务器注册并完成当天心跳；
 7. 由用户在 App 前台明确点击后，按 8 条一批串行完成当天全部互赞任务。
 
+Termux bootstrap 会显示真实解压百分比；NapCat 官方安装流程会按 Termux
+依赖、容器下载、容器初始化、QQ/NapCat 安装五个阶段持续更新进度。安装仍由
+NapCat 官方脚本执行，App 只增加本机进度文件和轮询展示。
+
 第一版没有后台 Service、定时任务或开机常驻。离开 App 前台后会停止领取并
 执行后续任务。构建 App 不会自动执行任何真实点赞。
 
@@ -61,6 +65,20 @@ gradle -PmutualLikeServerUrl=http://10.0.2.2:18081 assembleDebug
 ```text
 app/build/outputs/apk/debug/app-debug.apk
 ```
+
+## App 自动更新
+
+App 启动后自动请求：
+
+```http
+GET /api/tools/qq-like/mobile/app/update
+```
+
+发现更高 `version_code` 后，用户确认一次即可自动下载 APK。下载页面显示百分比
+和文件大小，完成后校验服务端返回的 `size_bytes` 与 `sha256`。只有校验通过
+才会通过私有 `ContentProvider` 打开 Android 系统安装器。普通 Android App
+不能静默覆盖安装，因此首次更新需要允许“安装未知应用”，每次安装仍由系统页面
+做最终确认。
 
 单 APK 的构建方式、输入文件校验值和限制见
 `/Users/liyangxu/data/workspace/github/termux-mutual-like-app/MUTUAL_LIKE_BUILD.md`。
@@ -130,7 +148,7 @@ Content-Type: application/json
 {
   "qq_number": "123456789",
   "install_id": "app-generated-uuid",
-  "app_version": "0.1.0"
+  "app_version": "0.1.2"
 }
 ```
 

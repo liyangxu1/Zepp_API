@@ -9,6 +9,10 @@ import android.os.Bundle;
 public final class TermuxResultService extends IntentService {
     public static final String EXTRA_OPERATION = "operation";
     public static final String EXTRA_EXECUTION_ID = "execution_id";
+    public static final String EXTRA_STDOUT = "stdout";
+    public static final String EXTRA_STDERR = "stderr";
+    public static final String EXTRA_ERROR = "error";
+    public static final String EXTRA_EXIT_CODE = "exit_code";
     public static final String ACTION_RESULT =
         "com.litianyi.napcatassistant.COMMAND_RESULT";
     public static final String PREFERENCES = "termux_results";
@@ -51,6 +55,10 @@ public final class TermuxResultService extends IntentService {
         Intent broadcast = new Intent(ACTION_RESULT);
         broadcast.setPackage(getPackageName());
         broadcast.putExtra(EXTRA_OPERATION, operation);
+        broadcast.putExtra(EXTRA_STDOUT, trimResult(stdout));
+        broadcast.putExtra(EXTRA_STDERR, trimResult(stderr));
+        broadcast.putExtra(EXTRA_ERROR, trimResult(errorMessage));
+        broadcast.putExtra(EXTRA_EXIT_CODE, exitCode);
         sendBroadcast(broadcast);
     }
 

@@ -1,4 +1,5 @@
 import http.client
+import hashlib
 import json
 import sqlite3
 import tempfile
@@ -437,6 +438,24 @@ class MobileQQLikeHTTPAPITest(unittest.TestCase):
         root = Path(self.temp_dir.name)
         self.db_path = root / "qq-like.sqlite3"
         self.tool_db_path = root / "tools.sqlite3"
+        self.release_dir = root / "releases"
+        self.release_dir.mkdir()
+        self.release_manifest_path = self.release_dir / "latest.json"
+        self.release_apk_path = self.release_dir / "latest.apk"
+        self.release_apk_path.write_bytes(b"fake-android-apk")
+        self.release_manifest_path.write_text(
+            json.dumps(
+                {
+                    "version_code": 1004,
+                    "version_name": "0.1.2",
+                    "title": "互赞助手 0.1.2",
+                    "changelog": ["支持自动检查和下载安装更新"],
+                    "force_update": False,
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
         self.legacy_service = self.FakeLegacyService()
         self.servers = []
         servers = self.servers
@@ -461,6 +480,12 @@ class MobileQQLikeHTTPAPITest(unittest.TestCase):
                 QQ_LIKE_DB_PATH=self.db_path,
                 QQ_LIKE_MOBILE_DB_PATH=self.db_path,
                 QQ_LIKE_DATA_ROOT=root / "runtime",
+                QQ_LIKE_MOBILE_RELEASE_DIR=self.release_dir,
+                QQ_LIKE_MOBILE_RELEASE_MANIFEST_PATH=(
+                    self.release_manifest_path
+                ),
+                QQ_LIKE_MOBILE_RELEASE_APK_PATH=self.release_apk_path,
+                QQ_LIKE_MOBILE_RELEASE_CACHE={},
                 QQ_LIKE_MOBILE_MAX_BATCH_SIZE=8,
                 QQ_LIKE_MOBILE_LEASE_SECONDS=600,
                 QQ_LIKE_MOBILE_LIKES_PER_TARGET=10,
@@ -526,6 +551,23 @@ class MobileQQLikeHTTPAPITest(unittest.TestCase):
             response = connection.getresponse()
             data = json.loads(response.read().decode("utf-8"))
             return response.status, data
+        finally:
+            connection.close()
+
+    def raw_request(self, path: str, *, method: str = "GET"):
+        connection = http.client.HTTPConnection(
+            "127.0.0.1",
+            self.port,
+            timeout=5,
+        )
+        try:
+            connection.request(method, path)
+            response = connection.getresponse()
+            return (
+                response.status,
+                dict(response.getheaders()),
+                response.read(),
+            )
         finally:
             connection.close()
 
@@ -621,6 +663,49 @@ class MobileQQLikeHTTPAPITest(unittest.TestCase):
         self.assertEqual(200, status)
         self.assertTrue(repeated["task"]["idempotent"])
         self.assertFalse(self.legacy_service.started)
+
+    def test_mobile_app_update_manifest_and_apk_download(self) -> None:
+        status, headers, raw_manifest = self.raw_request(
+            "/api/tools/qq-like/mobile/app/update"
+            "?current_version_code=1003"
+        )
+        self.assertEqual(200, status)
+        manifest = json.loads(raw_manifest.decode("utf-8"))
+        self.assertTrue(manifest["available"])
+        self.assertEqual(1004, manifest["release"]["version_code"])
+        self.assertEqual("0.1.2", manifest["release"]["version_name"])
+        self.assertEqual(
+            hashlib.sha256(b"fake-android-apk").hexdigest(),
+            manifest["release"]["sha256"],
+        )
+        self.assertEqual(
+            len(b"fake-android-apk"),
+            manifest["release"]["size_bytes"],
+        )
+        self.assertEqual(
+            "/api/tools/qq-like/mobile/app/apk",
+            manifest["release"]["download_url"],
+        )
+        self.assertIn("application/json", headers["Content-Type"])
+
+        status, _, current_manifest = self.raw_request(
+            "/api/tools/qq-like/mobile/app/update"
+            "?current_version_code=1004"
+        )
+        self.assertEqual(200, status)
+        self.assertFalse(
+            json.loads(current_manifest.decode("utf-8"))["available"]
+        )
+
+        status, apk_headers, apk_data = self.raw_request(
+            "/api/tools/qq-like/mobile/app/apk"
+        )
+        self.assertEqual(200, status)
+        self.assertEqual(b"fake-android-apk", apk_data)
+        self.assertEqual(
+            "application/vnd.android.package-archive",
+            apk_headers["Content-Type"],
+        )
 
     def test_http_rejects_unlisted_and_invalid_credentials(self) -> None:
         status, rejected = self.request(
