@@ -6,11 +6,14 @@ import android.app.AlertDialog;
 import android.content.BroadcastReceiver;
 import android.content.ClipData;
 import android.content.ClipboardManager;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
+import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -30,6 +33,7 @@ import org.json.JSONObject;
 import java.io.File;
 import java.text.SimpleDateFormat;
 import java.util.Date;
+import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -1225,6 +1229,18 @@ public final class MainActivity extends Activity {
                 "application/vnd.android.package-archive"
             );
             intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            ResolveInfo installer = findSystemPackageInstaller(intent);
+            if (installer != null) {
+                String packageName = installer.activityInfo.packageName;
+                intent.setComponent(
+                    new ComponentName(packageName, installer.activityInfo.name)
+                );
+                grantUriPermission(
+                    packageName,
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                );
+            }
             startActivity(intent);
             getSharedPreferences(UPDATE_PREFERENCES, MODE_PRIVATE)
                 .edit()
@@ -1236,6 +1252,29 @@ public final class MainActivity extends Activity {
                 safeMessage(error)
             );
         }
+    }
+
+    private ResolveInfo findSystemPackageInstaller(Intent intent) {
+        List<ResolveInfo> candidates = getPackageManager()
+            .queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY);
+        ResolveInfo firstExternal = null;
+        for (ResolveInfo candidate : candidates) {
+            if (candidate.activityInfo == null
+                || getPackageName().equals(candidate.activityInfo.packageName)) {
+                continue;
+            }
+            if (firstExternal == null) {
+                firstExternal = candidate;
+            }
+            ApplicationInfo applicationInfo =
+                candidate.activityInfo.applicationInfo;
+            int flags = applicationInfo == null ? 0 : applicationInfo.flags;
+            if ((flags & (ApplicationInfo.FLAG_SYSTEM
+                | ApplicationInfo.FLAG_UPDATED_SYSTEM_APP)) != 0) {
+                return candidate;
+            }
+        }
+        return firstExternal;
     }
 
     private void showOperationProgress(
