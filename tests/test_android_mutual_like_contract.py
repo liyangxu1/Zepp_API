@@ -33,7 +33,7 @@ class AndroidMutualLikeContractTest(unittest.TestCase):
             activity,
         )
         self.assertIn("mutualLikeCancellation.set(true)", activity)
-        self.assertIn("当前账号未加入测试名单", activity)
+        self.assertNotIn("当前账号未加入测试名单", activity)
 
     def test_executor_pages_until_empty_and_stops_on_report_failure(self) -> None:
         executor = (JAVA_ROOT / "MutualLikeExecutor.java").read_text()

@@ -204,7 +204,7 @@ BAIDU_SHARE_CLEANUP_INTERVAL_SECONDS="600"
 
 ### 6) QQ 互赞工具
 
-移动互赞模式下，工具网只维护测试白名单、当天活跃池、任务租约和结果记录。
+移动互赞模式下，工具网只维护点赞目标、当天活跃池、任务租约和结果记录。
 QQ、NapCat、登录态、OneBot token 与 `send_like` 全部留在用户手机。服务器不
 启动 QQ、NapCat 或 Docker。
 
@@ -225,7 +225,8 @@ QQ_LIKE_MOBILE_RUNTIME_ROOTFS_PATH="/data/web/zepp-api-python/.qq-like-runtime/d
 
 运行约束：
 
-- 只有后台启用的白名单 QQ 才能注册；
+- App 确认本机 QQ 在线后即可开放注册，不需要后台白名单；
+- 只有后台启用的点赞目标才会下发；
 - QQ 在线确认和心跳成功后才进入北京时间当天活跃池；
 - 同一来源、目标和业务日期只有一条有向任务；
 - 每次最多租约 8 条，租约 600 秒；
@@ -237,11 +238,11 @@ QQ_LIKE_MOBILE_RUNTIME_ROOTFS_PATH="/data/web/zepp-api-python/.qq-like-runtime/d
 
 ```text
 GET  /api/admin/qq-like/mobile/overview
-POST /api/admin/qq-like/mobile/allowlist
+POST /api/admin/qq-like/mobile/targets
 POST /api/admin/qq-like/mobile/accounts/action
 ```
 
-`/admin` 可以维护白名单、查看当天活跃账号和任务明细、停用账号及重置设备
+`/admin` 可以维护点赞目标、查看当天活跃账号和任务明细、停用账号及重置设备
 绑定。完整 QQ 号只在已认证后台返回。
 
 App 更新接口不需要 QQ 登录或任务凭证：

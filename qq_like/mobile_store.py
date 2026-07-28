@@ -1,4 +1,4 @@
-"""手机端 QQ 互赞白名单、账号、每日有向任务和租约的数据层。"""
+"""手机端 QQ 互赞目标、来源账号、每日有向任务和租约的数据层。"""
 
 from __future__ import annotations
 
@@ -147,6 +147,7 @@ class MobileQQLikeStore:
                     qq_number TEXT NOT NULL UNIQUE,
                     access_token_hash TEXT NOT NULL UNIQUE,
                     opted_in INTEGER NOT NULL DEFAULT 1,
+                    target_only INTEGER NOT NULL DEFAULT 0,
                     install_id_hash TEXT NOT NULL DEFAULT '',
                     app_version TEXT NOT NULL DEFAULT '',
                     active_business_date TEXT NOT NULL DEFAULT '',
@@ -155,6 +156,7 @@ class MobileQQLikeStore:
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     CHECK (opted_in IN (0, 1)),
+                    CHECK (target_only IN (0, 1)),
                     CHECK (binding_reset_pending IN (0, 1))
                 );
 
@@ -206,6 +208,12 @@ class MobileQQLikeStore:
             self._ensure_column(
                 conn,
                 "qq_like_mobile_accounts",
+                "target_only",
+                "INTEGER NOT NULL DEFAULT 0",
+            )
+            self._ensure_column(
+                conn,
+                "qq_like_mobile_accounts",
                 "install_id_hash",
                 "TEXT NOT NULL DEFAULT ''",
             )
@@ -229,17 +237,19 @@ class MobileQQLikeStore:
             )
         self.db_path.chmod(0o600)
 
-    def upsert_allowlist(
+    def upsert_target(
         self,
         qq_number: str,
         *,
         enabled: bool = True,
-        note: str = "",
+        display_name: str = "",
     ) -> Dict[str, object]:
+        """新增或更新点赞目标，并为任务外键创建轻量目标记录。"""
+
         self.init_schema()
         normalized_qq = _normalize_qq_number(qq_number)
         now = self._now_text()
-        clean_note = str(note or "").strip()[:200]
+        clean_name = str(display_name or "").strip()[:200]
         with self._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
             conn.execute(
@@ -252,52 +262,65 @@ class MobileQQLikeStore:
                     note = excluded.note,
                     updated_at = excluded.updated_at
                 """,
-                (normalized_qq, int(bool(enabled)), clean_note, now, now),
+                (normalized_qq, int(bool(enabled)), clean_name, now, now),
             )
-            conn.execute(
+            existing = conn.execute(
                 """
-                UPDATE qq_like_mobile_accounts
-                SET opted_in = ?, updated_at = ?
+                SELECT id
+                FROM qq_like_mobile_accounts
                 WHERE qq_number = ?
                 """,
-                (int(bool(enabled)), now, normalized_qq),
-            )
+                (normalized_qq,),
+            ).fetchone()
+            if existing is None:
+                conn.execute(
+                    """
+                    INSERT INTO qq_like_mobile_accounts (
+                        id, qq_number, access_token_hash, opted_in, target_only,
+                        install_id_hash, app_version, active_business_date,
+                        binding_reset_pending, last_seen_at, created_at,
+                        updated_at
+                    ) VALUES (?, ?, ?, 0, 1, '', '', '', 0, '', ?, ?)
+                    """,
+                    (
+                        f"qlm_target_{uuid.uuid4().hex}",
+                        normalized_qq,
+                        _token_digest(
+                            f"target:{uuid.uuid4().hex}:{secrets.token_urlsafe(16)}"
+                        ),
+                        now,
+                        now,
+                    ),
+                )
             row = conn.execute(
                 """
-                SELECT *
-                FROM qq_like_mobile_allowlist
-                WHERE qq_number = ?
+                SELECT target.qq_number, target.enabled,
+                       target.note AS display_name,
+                       target.created_at, target.updated_at,
+                       account.id AS target_account_id
+                FROM qq_like_mobile_allowlist AS target
+                JOIN qq_like_mobile_accounts AS account
+                  ON account.qq_number = target.qq_number
+                WHERE target.qq_number = ?
                 """,
                 (normalized_qq,),
             ).fetchone()
         return dict(row)
 
-    def _allowlist_row_locked(
+    def upsert_allowlist(
         self,
-        conn: sqlite3.Connection,
         qq_number: str,
-    ) -> sqlite3.Row:
-        row = conn.execute(
-            """
-            SELECT *
-            FROM qq_like_mobile_allowlist
-            WHERE qq_number = ?
-            """,
-            (qq_number,),
-        ).fetchone()
-        if row is None:
-            raise MobileQQLikeStoreError(
-                "当前账号未加入测试名单",
-                http_status=403,
-                error_code="not_allowlisted",
-            )
-        if not row["enabled"]:
-            raise MobileQQLikeStoreError(
-                "当前账号已被停用",
-                http_status=403,
-                error_code="allowlist_disabled",
-            )
-        return row
+        *,
+        enabled: bool = True,
+        note: str = "",
+    ) -> Dict[str, object]:
+        """兼容旧调用；白名单表已改作点赞目标列表。"""
+
+        return self.upsert_target(
+            qq_number,
+            enabled=enabled,
+            display_name=note,
+        )
 
     def register(
         self,
@@ -307,7 +330,7 @@ class MobileQQLikeStore:
         app_version: str,
         access_token: str = "",
     ) -> Dict[str, object]:
-        """白名单 QQ 首次签发凭证，已有绑定必须携带原凭证。"""
+        """任意在线 QQ 可首次签发凭证，已有绑定必须携带原凭证。"""
 
         self.init_schema()
         normalized_qq = _normalize_qq_number(qq_number)
@@ -321,7 +344,6 @@ class MobileQQLikeStore:
         install_id_hash = _token_digest(normalized_install_id)
         with self._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            self._allowlist_row_locked(conn, normalized_qq)
             existing = conn.execute(
                 """
                 SELECT *
@@ -331,6 +353,36 @@ class MobileQQLikeStore:
                 (normalized_qq,),
             ).fetchone()
             if existing is not None:
+                if bool(existing["target_only"]):
+                    conn.execute(
+                        """
+                        UPDATE qq_like_mobile_accounts
+                        SET access_token_hash = ?, opted_in = 1,
+                            target_only = 0, install_id_hash = ?,
+                            app_version = ?, active_business_date = '',
+                            binding_reset_pending = 0, last_seen_at = ?,
+                            updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            _token_digest(new_token),
+                            install_id_hash,
+                            clean_version,
+                            now,
+                            now,
+                            existing["id"],
+                        ),
+                    )
+                    account = conn.execute(
+                        "SELECT * FROM qq_like_mobile_accounts WHERE id = ?",
+                        (existing["id"],),
+                    ).fetchone()
+                    return {
+                        "account": dict(account),
+                        "access_token": new_token,
+                        "created": True,
+                        "rebound": False,
+                    }
                 token_matches = bool(access_token) and hmac.compare_digest(
                     _token_digest(access_token),
                     str(existing["access_token_hash"]),
@@ -347,7 +399,7 @@ class MobileQQLikeStore:
                         """
                         UPDATE qq_like_mobile_accounts
                         SET access_token_hash = ?, install_id_hash = ?,
-                            app_version = ?, opted_in = 1,
+                            app_version = ?, opted_in = 1, target_only = 0,
                             binding_reset_pending = 0, updated_at = ?
                         WHERE id = ?
                         """,
@@ -366,7 +418,7 @@ class MobileQQLikeStore:
                         """
                         UPDATE qq_like_mobile_accounts
                         SET install_id_hash = ?, app_version = ?,
-                            opted_in = 1, updated_at = ?
+                            target_only = 0, updated_at = ?
                         WHERE id = ?
                         """,
                         (
@@ -392,10 +444,10 @@ class MobileQQLikeStore:
             conn.execute(
                 """
                 INSERT INTO qq_like_mobile_accounts (
-                    id, qq_number, access_token_hash, opted_in,
+                    id, qq_number, access_token_hash, opted_in, target_only,
                     install_id_hash, app_version, active_business_date,
                     binding_reset_pending, last_seen_at, created_at, updated_at
-                ) VALUES (?, ?, ?, 1, ?, ?, '', 0, ?, ?, ?)
+                ) VALUES (?, ?, ?, 1, 0, ?, ?, '', 0, ?, ?, ?)
                 """,
                 (
                     account_id,
@@ -430,11 +482,9 @@ class MobileQQLikeStore:
         with self._connection() as conn:
             row = conn.execute(
                 """
-                SELECT account.*, allowlist.enabled AS allowlist_enabled
-                FROM qq_like_mobile_accounts AS account
-                LEFT JOIN qq_like_mobile_allowlist AS allowlist
-                  ON allowlist.qq_number = account.qq_number
-                WHERE account.access_token_hash = ?
+                SELECT *
+                FROM qq_like_mobile_accounts
+                WHERE access_token_hash = ?
                 """,
                 (_token_digest(access_token),),
             ).fetchone()
@@ -445,7 +495,7 @@ class MobileQQLikeStore:
                 error_code="token_invalid",
             )
         account = dict(row)
-        if not account["opted_in"] or not account["allowlist_enabled"]:
+        if not account["opted_in"] or bool(account["target_only"]):
             raise MobileQQLikeStoreError(
                 "当前账号已被停用",
                 http_status=403,
@@ -468,6 +518,7 @@ class MobileQQLikeStore:
                 UPDATE qq_like_mobile_accounts
                 SET active_business_date = ?, last_seen_at = ?, updated_at = ?
                 WHERE id = ? AND opted_in = 1
+                  AND target_only = 0
                   AND binding_reset_pending = 0
                 """,
                 (business_date, now, now, account_id),
@@ -549,17 +600,13 @@ class MobileQQLikeStore:
               ON task.source_account_id = ?
              AND task.target_account_id = target.id
              AND task.business_date = ?
-            WHERE target.opted_in = 1
-              AND target.binding_reset_pending = 0
-              AND target.active_business_date = ?
-              AND target.id != ?
+            WHERE target.id != ?
               AND task.id IS NULL
-            ORDER BY target.created_at ASC, target.id ASC
+            ORDER BY allowlist.created_at ASC, target.id ASC
             LIMIT ?
             """,
             (
                 source_account_id,
-                business_date,
                 business_date,
                 source_account_id,
                 remaining,
@@ -895,11 +942,8 @@ class MobileQQLikeStore:
                   ON allowlist.qq_number = target.qq_number
                  AND allowlist.enabled = 1
                 WHERE target.id != ?
-                  AND target.opted_in = 1
-                  AND target.binding_reset_pending = 0
-                  AND target.active_business_date = ?
                 """,
-                (account_id, business_date),
+                (account_id,),
             ).fetchone()[0]
         )
         materialized = sum(counts.values())
@@ -937,33 +981,30 @@ class MobileQQLikeStore:
         now = self._now_text()
         with self._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            allowlist = conn.execute(
+            account = conn.execute(
                 """
                 SELECT *
-                FROM qq_like_mobile_allowlist
-                WHERE qq_number = ?
+                FROM qq_like_mobile_accounts
+                WHERE qq_number = ? AND target_only = 0
                 """,
                 (normalized_qq,),
             ).fetchone()
-            if allowlist is None:
-                raise MobileQQLikeStoreError("白名单中不存在该 QQ")
+            if account is None:
+                raise MobileQQLikeStoreError("未找到已注册的 App 账号")
             if clean_action in {"enable", "disable"}:
                 enabled = int(clean_action == "enable")
                 conn.execute(
                     """
-                    UPDATE qq_like_mobile_allowlist
-                    SET enabled = ?, updated_at = ?
-                    WHERE qq_number = ?
-                    """,
-                    (enabled, now, normalized_qq),
-                )
-                conn.execute(
-                    """
                     UPDATE qq_like_mobile_accounts
-                    SET opted_in = ?, updated_at = ?
+                    SET opted_in = ?,
+                        active_business_date = CASE
+                            WHEN ? = 1 THEN active_business_date
+                            ELSE ''
+                        END,
+                        updated_at = ?
                     WHERE qq_number = ?
                     """,
-                    (enabled, now, normalized_qq),
+                    (enabled, enabled, now, normalized_qq),
                 )
             else:
                 revoked_hash = _token_digest(
@@ -981,20 +1022,22 @@ class MobileQQLikeStore:
                 )
             row = conn.execute(
                 """
-                SELECT allowlist.*, account.id AS account_id,
-                       account.install_id_hash,
-                       account.binding_reset_pending,
-                       account.active_business_date,
-                       account.last_seen_at,
-                       account.app_version
-                FROM qq_like_mobile_allowlist AS allowlist
-                LEFT JOIN qq_like_mobile_accounts AS account
-                  ON account.qq_number = allowlist.qq_number
-                WHERE allowlist.qq_number = ?
+                SELECT id AS account_id, qq_number, opted_in,
+                       install_id_hash, binding_reset_pending,
+                       active_business_date, last_seen_at, app_version
+                FROM qq_like_mobile_accounts
+                WHERE qq_number = ? AND target_only = 0
                 """,
                 (normalized_qq,),
             ).fetchone()
-        return dict(row)
+        payload = dict(row)
+        payload["opted_in"] = bool(payload["opted_in"])
+        payload["binding_reset_pending"] = bool(
+            payload["binding_reset_pending"]
+        )
+        payload["device_bound"] = bool(payload["install_id_hash"])
+        payload.pop("install_id_hash", None)
+        return payload
 
     def admin_overview(self, *, task_limit: int = 300) -> Dict[str, object]:
         self.init_schema()
@@ -1002,20 +1045,16 @@ class MobileQQLikeStore:
         business_date = self.business_date()
         safe_limit = max(1, min(int(task_limit), 1000))
         with self._connection() as conn:
-            allowlist_rows = conn.execute(
+            target_rows = conn.execute(
                 """
-                SELECT allowlist.qq_number, allowlist.enabled, allowlist.note,
-                       allowlist.created_at, allowlist.updated_at,
-                       account.id AS account_id,
-                       account.app_version,
-                       account.active_business_date,
-                       account.last_seen_at,
-                       account.install_id_hash,
-                       account.binding_reset_pending
-                FROM qq_like_mobile_allowlist AS allowlist
-                LEFT JOIN qq_like_mobile_accounts AS account
-                  ON account.qq_number = allowlist.qq_number
-                ORDER BY allowlist.created_at ASC, allowlist.qq_number ASC
+                SELECT target.qq_number, target.enabled,
+                       target.note AS display_name,
+                       target.created_at, target.updated_at,
+                       account.id AS target_account_id
+                FROM qq_like_mobile_allowlist AS target
+                JOIN qq_like_mobile_accounts AS account
+                  ON account.qq_number = target.qq_number
+                ORDER BY target.created_at ASC, target.qq_number ASC
                 """
             ).fetchall()
             account_rows = conn.execute(
@@ -1024,10 +1063,9 @@ class MobileQQLikeStore:
                        account.active_business_date, account.last_seen_at,
                        account.created_at, account.updated_at,
                        account.install_id_hash, account.binding_reset_pending,
-                       account.opted_in, allowlist.enabled AS allowlist_enabled
+                       account.opted_in
                 FROM qq_like_mobile_accounts AS account
-                LEFT JOIN qq_like_mobile_allowlist AS allowlist
-                  ON allowlist.qq_number = account.qq_number
+                WHERE account.target_only = 0
                 ORDER BY account.last_seen_at DESC, account.qq_number ASC
                 """
             ).fetchall()
@@ -1035,6 +1073,7 @@ class MobileQQLikeStore:
                 """
                 SELECT task.id, source.qq_number AS source_qq,
                        target.qq_number AS target_qq,
+                       target_list.note AS target_name,
                        task.business_date, task.status,
                        task.requested_times, task.lease_expires_at,
                        task.result_code, task.result_message,
@@ -1045,6 +1084,8 @@ class MobileQQLikeStore:
                   ON source.id = task.source_account_id
                 JOIN qq_like_mobile_accounts AS target
                   ON target.id = task.target_account_id
+                LEFT JOIN qq_like_mobile_allowlist AS target_list
+                  ON target_list.qq_number = target.qq_number
                 WHERE task.business_date = ?
                 ORDER BY task.created_at DESC, task.id DESC
                 LIMIT ?
@@ -1064,23 +1105,17 @@ class MobileQQLikeStore:
         status_counts = {status: 0 for status in MOBILE_TASK_STATUSES}
         for row in status_rows:
             status_counts[str(row["status"])] = int(row["count"])
-        allowlist_payload = []
-        for row in allowlist_rows:
+        target_payload = []
+        for row in target_rows:
             item = dict(row)
             item["enabled"] = bool(item["enabled"])
-            item["device_bound"] = bool(item["install_id_hash"])
-            item["binding_reset_pending"] = bool(
-                item["binding_reset_pending"] or False
-            )
-            item.pop("install_id_hash", None)
-            allowlist_payload.append(item)
+            target_payload.append(item)
         account_payload = []
         for row in account_rows:
             item = dict(row)
             item["active_today"] = (
                 item["active_business_date"] == business_date
                 and bool(item["opted_in"])
-                and bool(item["allowlist_enabled"])
                 and not bool(item["binding_reset_pending"])
             )
             item["device_bound"] = bool(item["install_id_hash"])
@@ -1088,7 +1123,6 @@ class MobileQQLikeStore:
                 item["binding_reset_pending"]
             )
             item["opted_in"] = bool(item["opted_in"])
-            item["allowlist_enabled"] = bool(item["allowlist_enabled"])
             item.pop("install_id_hash", None)
             account_payload.append(item)
         summary = {
@@ -1098,14 +1132,14 @@ class MobileQQLikeStore:
             "active_accounts": sum(
                 1 for item in account_payload if item["active_today"]
             ),
-            "allowlisted_accounts": sum(
-                1 for item in allowlist_payload if item["enabled"]
+            "target_accounts": sum(
+                1 for item in target_payload if item["enabled"]
             ),
         }
         return {
             "business_date": business_date,
             "summary": summary,
-            "allowlist": allowlist_payload,
+            "targets": target_payload,
             "accounts": account_payload,
             "tasks": [dict(row) for row in task_rows],
         }

@@ -8576,7 +8576,7 @@ def _admin_page_html() -> str:
 
     <section class="panel hidden" id="qqLikeMobilePanel">
       <h2>QQ App 互赞管理</h2>
-      <p>服务器只维护测试白名单、当天活跃池和任务结果；QQ 登录、NapCat 与 send_like 均在用户手机执行。</p>
+      <p><span class="badge success">开放注册已启用</span> 只要 App 确认本机 QQ 在线，就能注册并进入当天活跃池；服务器只维护点赞目标和任务结果。</p>
       <div class="stats-grid">
         <div class="stat-card">
           <div class="stat-label">当天活跃</div>
@@ -8598,25 +8598,24 @@ def _admin_page_html() -> str:
 
       <div class="admin-grid">
         <section class="sub-panel">
-          <h2>测试白名单</h2>
-          <p>首次注册只允许启用的 QQ；重置绑定后旧任务凭证立即失效。</p>
-          <form class="inline-form" id="qqMobileAllowlistForm">
-            <input id="qqMobileAllowlistQq" inputmode="numeric" maxlength="12" placeholder="QQ 号" />
-            <input id="qqMobileAllowlistNote" maxlength="200" placeholder="备注（可选）" />
-            <button type="submit" id="qqMobileAllowlistSubmit">添加 / 更新</button>
+          <h2>点赞目标列表</h2>
+          <p>启用的目标会按每批 8 个下发；同一来源每天只会生成一次任务。</p>
+          <form class="inline-form" id="qqMobileTargetForm">
+            <input id="qqMobileTargetQq" inputmode="numeric" maxlength="12" placeholder="QQ 号" />
+            <input id="qqMobileTargetName" maxlength="200" placeholder="昵称（可选）" />
+            <button type="submit" id="qqMobileTargetSubmit">添加 / 更新</button>
           </form>
           <div class="table-wrap">
             <table>
               <thead>
                 <tr>
                   <th>QQ 号</th>
+                  <th>昵称</th>
                   <th>状态</th>
-                  <th>备注</th>
-                  <th>设备</th>
                   <th>操作</th>
                 </tr>
               </thead>
-              <tbody id="qqMobileAllowlistRows"></tbody>
+              <tbody id="qqMobileTargetRows"></tbody>
             </table>
           </div>
         </section>
@@ -8632,6 +8631,8 @@ def _admin_page_html() -> str:
                   <th>App 版本</th>
                   <th>最后心跳</th>
                   <th>今日状态</th>
+                  <th>账号状态</th>
+                  <th>操作</th>
                 </tr>
               </thead>
               <tbody id="qqMobileAccountRows"></tbody>
@@ -8699,11 +8700,11 @@ def _admin_page_html() -> str:
     const baiduStorageJobs = document.getElementById('baiduStorageJobs')
     const qqMobileStatus = document.getElementById('qqMobileStatus')
     const qqMobileBusinessDate = document.getElementById('qqMobileBusinessDate')
-    const qqMobileAllowlistForm = document.getElementById('qqMobileAllowlistForm')
-    const qqMobileAllowlistQq = document.getElementById('qqMobileAllowlistQq')
-    const qqMobileAllowlistNote = document.getElementById('qqMobileAllowlistNote')
-    const qqMobileAllowlistSubmit = document.getElementById('qqMobileAllowlistSubmit')
-    const qqMobileAllowlistRows = document.getElementById('qqMobileAllowlistRows')
+    const qqMobileTargetForm = document.getElementById('qqMobileTargetForm')
+    const qqMobileTargetQq = document.getElementById('qqMobileTargetQq')
+    const qqMobileTargetName = document.getElementById('qqMobileTargetName')
+    const qqMobileTargetSubmit = document.getElementById('qqMobileTargetSubmit')
+    const qqMobileTargetRows = document.getElementById('qqMobileTargetRows')
     const qqMobileAccountRows = document.getElementById('qqMobileAccountRows')
     const qqMobileTaskRows = document.getElementById('qqMobileTaskRows')
     const reloadQqMobile = document.getElementById('reloadQqMobile')
@@ -8990,40 +8991,44 @@ def _admin_page_html() -> str:
       document.getElementById('qqMobileAbnormalCount').textContent = summary.abnormal || 0
       qqMobileBusinessDate.textContent = `北京时间业务日期：${data.business_date || '-'}`
 
-      const allowlist = Array.isArray(data.allowlist) ? data.allowlist : []
-      qqMobileAllowlistRows.innerHTML = allowlist.length
-        ? allowlist.map((item) => {
+      const targets = Array.isArray(data.targets) ? data.targets : []
+      qqMobileTargetRows.innerHTML = targets.length
+        ? targets.map((item) => {
           const action = item.enabled ? 'disable' : 'enable'
           const actionText = item.enabled ? '停用' : '启用'
-          const deviceText = item.binding_reset_pending
-            ? '等待重新绑定'
-            : (item.device_bound ? '已绑定' : '未绑定')
           return `
             <tr>
               <td>${escapeHtml(item.qq_number)}</td>
+              <td>${escapeHtml(item.display_name || '-')}</td>
               <td><span class="badge ${item.enabled ? 'success' : 'failed'}">${item.enabled ? '启用' : '停用'}</span></td>
-              <td>${escapeHtml(item.note || '-')}</td>
-              <td>${escapeHtml(deviceText)}</td>
               <td>
-                <button class="mini-button ghost" type="button" data-qq-mobile-action="${action}" data-qq="${escapeHtml(item.qq_number)}">${actionText}</button>
-                <button class="mini-button ghost" type="button" data-qq-mobile-action="reset_binding" data-qq="${escapeHtml(item.qq_number)}">重置绑定</button>
+                <button class="mini-button ghost" type="button" data-qq-target-action="${action}" data-qq="${escapeHtml(item.qq_number)}" data-name="${escapeHtml(item.display_name || '')}">${actionText}</button>
               </td>
             </tr>
           `
         }).join('')
-        : '<tr><td colspan="5">暂无测试白名单。</td></tr>'
+        : '<tr><td colspan="4">暂无点赞目标。</td></tr>'
 
       const accounts = Array.isArray(data.accounts) ? data.accounts : []
       qqMobileAccountRows.innerHTML = accounts.length
-        ? accounts.map((item) => `
+        ? accounts.map((item) => {
+          const action = item.opted_in ? 'disable' : 'enable'
+          const actionText = item.opted_in ? '停用' : '启用'
+          return `
           <tr>
             <td>${escapeHtml(item.qq_number)}</td>
             <td>${escapeHtml(item.app_version || '-')}</td>
             <td>${escapeHtml(item.last_seen_at || '-')}</td>
             <td><span class="badge ${item.active_today ? 'success' : ''}">${item.active_today ? '今日活跃' : '今日未活跃'}</span></td>
+            <td><span class="badge ${item.opted_in ? 'success' : 'failed'}">${item.opted_in ? '启用' : '停用'}</span></td>
+            <td>
+              <button class="mini-button ghost" type="button" data-qq-account-action="${action}" data-qq="${escapeHtml(item.qq_number)}">${actionText}</button>
+              <button class="mini-button ghost" type="button" data-qq-account-action="reset_binding" data-qq="${escapeHtml(item.qq_number)}">重置绑定</button>
+            </td>
           </tr>
-        `).join('')
-        : '<tr><td colspan="4">暂无已注册 App 账号。</td></tr>'
+        `
+        }).join('')
+        : '<tr><td colspan="6">暂无已注册 App 账号。</td></tr>'
 
       const tasks = Array.isArray(data.tasks) ? data.tasks : []
       qqMobileTaskRows.innerHTML = tasks.length
@@ -9058,36 +9063,58 @@ def _admin_page_html() -> str:
       setStatus(qqMobileStatus, '互赞数据已刷新。', 'success')
     }
 
-    async function updateQqMobileAllowlist(event) {
+    async function updateQqMobileTarget(event) {
       event.preventDefault()
-      const qqNumber = qqMobileAllowlistQq.value.trim()
+      const qqNumber = qqMobileTargetQq.value.trim()
       if (!qqNumber) {
         setStatus(qqMobileStatus, '请填写 QQ 号。', 'failed')
         return
       }
-      qqMobileAllowlistSubmit.disabled = true
+      qqMobileTargetSubmit.disabled = true
       try {
-        const resp = await fetch('/api/admin/qq-like/mobile/allowlist', {
+        const resp = await fetch('/api/admin/qq-like/mobile/targets', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             qq_number: qqNumber,
-            note: qqMobileAllowlistNote.value.trim(),
+            display_name: qqMobileTargetName.value.trim(),
             enabled: true,
           })
         })
         const data = await resp.json()
         if (!resp.ok || data.status !== 'success') {
-          throw new Error(data.error || '白名单更新失败')
+          throw new Error(data.error || '点赞目标更新失败')
         }
-        qqMobileAllowlistQq.value = ''
-        qqMobileAllowlistNote.value = ''
+        qqMobileTargetQq.value = ''
+        qqMobileTargetName.value = ''
         renderQqMobileOverview(data)
-        setStatus(qqMobileStatus, '测试白名单已更新。', 'success')
+        setStatus(qqMobileStatus, '点赞目标已更新。', 'success')
       } catch (err) {
-        setStatus(qqMobileStatus, `白名单更新失败：${err.message || err}`, 'failed')
+        setStatus(qqMobileStatus, `点赞目标更新失败：${err.message || err}`, 'failed')
       } finally {
-        qqMobileAllowlistSubmit.disabled = false
+        qqMobileTargetSubmit.disabled = false
+      }
+    }
+
+    async function runQqMobileTargetAction(qqNumber, displayName, action) {
+      try {
+        const resp = await fetch('/api/admin/qq-like/mobile/targets', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            qq_number: qqNumber,
+            display_name: displayName,
+            enabled: action === 'enable',
+          })
+        })
+        const data = await resp.json()
+        if (!resp.ok || data.status !== 'success') {
+          throw new Error(data.error || '点赞目标操作失败')
+        }
+        renderQqMobileOverview(data)
+        setStatus(qqMobileStatus, '点赞目标状态已更新。', 'success')
+      } catch (err) {
+        setStatus(qqMobileStatus, `点赞目标操作失败：${err.message || err}`, 'failed')
       }
     }
 
@@ -9169,16 +9196,25 @@ def _admin_page_html() -> str:
 
     importBaiduCookie.addEventListener('click', importBaiduCookieToWorker)
     startBaiduQrLogin.addEventListener('click', startBaiduQrLoginFlow)
-    qqMobileAllowlistForm.addEventListener('submit', updateQqMobileAllowlist)
+    qqMobileTargetForm.addEventListener('submit', updateQqMobileTarget)
     reloadQqMobile.addEventListener('click', () => {
       loadQqMobileOverview().catch((err) => setStatus(qqMobileStatus, `加载失败：${err.message || err}`, 'failed'))
     })
-    qqMobileAllowlistRows.addEventListener('click', (event) => {
-      const button = event.target.closest('[data-qq-mobile-action]')
+    qqMobileTargetRows.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-qq-target-action]')
+      if (!button) return
+      runQqMobileTargetAction(
+        button.getAttribute('data-qq') || '',
+        button.getAttribute('data-name') || '',
+        button.getAttribute('data-qq-target-action') || ''
+      )
+    })
+    qqMobileAccountRows.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-qq-account-action]')
       if (!button) return
       runQqMobileAccountAction(
         button.getAttribute('data-qq') || '',
-        button.getAttribute('data-qq-mobile-action') || ''
+        button.getAttribute('data-qq-account-action') || ''
       )
     })
 
@@ -9588,7 +9624,7 @@ def _run_http_server(
                 return
             self._json_response(payload, headers=self._admin_headers())
 
-        def _handle_admin_qq_like_mobile_allowlist(
+        def _handle_admin_qq_like_mobile_target(
             self,
             params: Dict[str, str],
         ) -> None:
@@ -9604,10 +9640,10 @@ def _run_http_server(
             if not self._qq_like_mobile_available():
                 return
             try:
-                payload = qq_like_mobile_service.admin_upsert_allowlist(
+                payload = qq_like_mobile_service.admin_upsert_target(
                     qq_number=params.get("qq_number", ""),
                     enabled=params.get("enabled", True),
-                    note=params.get("note", ""),
+                    display_name=params.get("display_name", ""),
                 )
             except MobileQQLikeStoreError as exc:
                 self._qq_like_error(exc)
@@ -11053,8 +11089,16 @@ def _run_http_server(
                 self._handle_admin_qq_like_mobile_overview()
                 return
 
-            if path == "/api/admin/qq-like/mobile/allowlist":
-                self._handle_admin_qq_like_mobile_allowlist(params)
+            if path in {
+                "/api/admin/qq-like/mobile/targets",
+                "/api/admin/qq-like/mobile/allowlist",
+            }:
+                if path.endswith("/allowlist"):
+                    params = {
+                        **params,
+                        "display_name": params.get("note", ""),
+                    }
+                self._handle_admin_qq_like_mobile_target(params)
                 return
 
             if path == "/api/admin/qq-like/mobile/accounts/action":

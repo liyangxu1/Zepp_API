@@ -160,12 +160,12 @@ class MobileQQLikeService:
             **self.store.admin_overview(),
         }
 
-    def admin_upsert_allowlist(
+    def admin_upsert_target(
         self,
         *,
         qq_number: str,
         enabled: object = True,
-        note: str = "",
+        display_name: str = "",
     ) -> Dict[str, Any]:
         self._require_enabled()
         if isinstance(enabled, str):
@@ -177,16 +177,31 @@ class MobileQQLikeService:
             }
         else:
             enabled_value = bool(enabled)
-        item = self.store.upsert_allowlist(
+        item = self.store.upsert_target(
             qq_number,
             enabled=enabled_value,
-            note=note,
+            display_name=display_name,
         )
         return {
             "status": "success",
-            "allowlist_item": item,
+            "target": item,
             **self.store.admin_overview(),
         }
+
+    def admin_upsert_allowlist(
+        self,
+        *,
+        qq_number: str,
+        enabled: object = True,
+        note: str = "",
+    ) -> Dict[str, Any]:
+        """兼容旧后台调用，内部语义已经改为点赞目标。"""
+
+        return self.admin_upsert_target(
+            qq_number=qq_number,
+            enabled=enabled,
+            display_name=note,
+        )
 
     def admin_account_action(
         self,

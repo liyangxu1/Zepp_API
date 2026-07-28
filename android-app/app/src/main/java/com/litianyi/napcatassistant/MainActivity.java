@@ -845,11 +845,7 @@ public final class MainActivity extends Activity {
                     registrationRunning.set(false);
                     mutualLikeRegistered = false;
                     mutualLikeButton.setEnabled(false);
-                    if (error.statusCode == 403
-                        && ("not_allowlisted".equals(error.errorCode)
-                            || "allowlist_disabled".equals(error.errorCode))) {
-                        mutualLikeStatus.setText("当前账号未加入测试名单");
-                    } else if (error.statusCode == 409
+                    if (error.statusCode == 409
                         && "binding_conflict".equals(error.errorCode)) {
                         mutualLikeStatus.setText(
                             "设备绑定不一致，请联系管理员重置绑定"

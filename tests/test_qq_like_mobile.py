@@ -43,11 +43,18 @@ class MobileQQLikeTest(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
 
-    def register(self, qq_number: str, *, heartbeat: bool = True):
-        self.store.upsert_allowlist(
-            qq_number,
-            note=f"测试账号 {qq_number}",
-        )
+    def register(
+        self,
+        qq_number: str,
+        *,
+        heartbeat: bool = True,
+        add_target: bool = True,
+    ):
+        if add_target:
+            self.store.upsert_target(
+                qq_number,
+                display_name=f"测试账号 {qq_number}",
+            )
         response = self.service.register(
             qq_number=qq_number,
             install_id=f"install-{qq_number}",
@@ -57,29 +64,27 @@ class MobileQQLikeTest(unittest.TestCase):
             self.service.heartbeat(response["access_token"])
         return response
 
-    def test_allowlist_rejects_unlisted_and_disabled_accounts(self) -> None:
-        with self.assertRaisesRegex(
-            MobileQQLikeStoreError,
-            "未加入测试名单",
-        ) as unlisted:
-            self.service.register(
-                qq_number="100001",
-                install_id="install-100001",
-                app_version="0.1.0-test",
-            )
-        self.assertEqual(403, unlisted.exception.http_status)
+    def test_open_registration_and_admin_disable(self) -> None:
+        registered = self.register("100001", add_target=False)
+        self.assertTrue(registered["access_token"])
+        self.store.set_account_action("100001", action="disable")
 
-        self.store.upsert_allowlist("100001", enabled=False)
         with self.assertRaisesRegex(
             MobileQQLikeStoreError,
             "已被停用",
         ) as disabled:
-            self.service.register(
-                qq_number="100001",
-                install_id="install-100001",
-                app_version="0.1.0-test",
-            )
+            self.service.heartbeat(registered["access_token"])
         self.assertEqual(403, disabled.exception.http_status)
+
+        repeated = self.service.register(
+            qq_number="100001",
+            install_id="install-100001",
+            app_version="0.1.0-test",
+            access_token=registered["access_token"],
+        )
+        self.assertFalse(repeated["created"])
+        with self.assertRaisesRegex(MobileQQLikeStoreError, "已被停用"):
+            self.service.heartbeat(registered["access_token"])
 
     def test_register_is_opt_in_and_only_token_hash_is_stored(self) -> None:
         response = self.register("100001")
@@ -152,18 +157,42 @@ class MobileQQLikeTest(unittest.TestCase):
         self.assertTrue(rebound["rebound"])
         self.assertNotEqual(first["access_token"], rebound["access_token"])
 
-    def test_only_accounts_heartbeating_today_enter_active_pool(self) -> None:
+    def test_target_list_does_not_require_registration_or_heartbeat(self) -> None:
         source = self.register("100001")
-        inactive = self.register("100002", heartbeat=False)
-        active = self.register("100003")
+        target = self.store.upsert_target(
+            "100002",
+            display_name="只作为点赞目标",
+        )
 
         leased = self.service.lease(source["access_token"])
         self.assertEqual(
-            ["100003"],
+            ["100002"],
             [task["target_qq"] for task in leased["tasks"]],
         )
-        self.assertTrue(inactive["access_token"])
-        self.assertTrue(active["access_token"])
+        overview = self.service.admin_overview()
+        self.assertEqual(
+            ["100001"],
+            [item["qq_number"] for item in overview["accounts"]],
+        )
+        self.assertTrue(target["target_account_id"])
+
+    def test_target_only_account_is_promoted_when_app_registers(self) -> None:
+        target = self.store.upsert_target(
+            "100001",
+            display_name="稍后登录",
+        )
+        registered = self.register("100001", add_target=False)
+        self.assertTrue(registered["created"])
+        self.assertEqual(
+            target["target_account_id"],
+            registered["device"]["id"],
+        )
+        account = self.store.get_account(registered["device"]["id"])
+        self.assertFalse(bool(account["target_only"]))
+        self.assertEqual(
+            "稍后登录",
+            self.service.admin_overview()["targets"][0]["display_name"],
+        )
 
     def test_daily_directional_tasks_exclude_self_and_are_unique(self) -> None:
         one = self.register("100001")
@@ -358,7 +387,7 @@ class MobileQQLikeTest(unittest.TestCase):
 
     def test_eight_item_batches_continue_until_all_targets_are_done(self) -> None:
         source = self.register("100001")
-        for number in range(2, 12):
+        for number in range(2, 15):
             self.register(f"1000{number:02d}")
 
         first = self.service.lease(source["access_token"])
@@ -373,7 +402,7 @@ class MobileQQLikeTest(unittest.TestCase):
             )
 
         second = self.service.lease(source["access_token"])
-        self.assertEqual(2, len(second["tasks"]))
+        self.assertEqual(5, len(second["tasks"]))
         self.assertFalse(
             {task["id"] for task in first["tasks"]}
             & {task["id"] for task in second["tasks"]}
@@ -388,7 +417,7 @@ class MobileQQLikeTest(unittest.TestCase):
             )
         finished = self.service.lease(source["access_token"])
         self.assertEqual([], finished["tasks"])
-        self.assertEqual(10, finished["summary"]["succeeded"])
+        self.assertEqual(13, finished["summary"]["succeeded"])
         self.assertEqual(0, finished["summary"]["pending"])
 
     def test_admin_overview_contains_full_qq_but_no_token_or_install_hash(self) -> None:
@@ -398,9 +427,14 @@ class MobileQQLikeTest(unittest.TestCase):
 
         overview = self.service.admin_overview()
         self.assertEqual(2, overview["summary"]["active_accounts"])
+        self.assertEqual(2, overview["summary"]["target_accounts"])
         self.assertEqual(
             {"100001", "100002"},
             {item["qq_number"] for item in overview["accounts"]},
+        )
+        self.assertEqual(
+            {"100001", "100002"},
+            {item["qq_number"] for item in overview["targets"]},
         )
         serialized = json.dumps(overview, ensure_ascii=False)
         self.assertNotIn("access_token", serialized)
@@ -510,7 +544,10 @@ class MobileQQLikeHTTPAPITest(unittest.TestCase):
         for patcher in self.patchers:
             patcher.start()
         for qq_number in ("100001", "100002"):
-            MobileQQLikeStore(self.db_path).upsert_allowlist(qq_number)
+            MobileQQLikeStore(self.db_path).upsert_target(
+                qq_number,
+                display_name=f"目标 {qq_number}",
+            )
         self.server_thread = threading.Thread(
             target=app._run_http_server,
             kwargs={"host": "127.0.0.1", "port": 0},
@@ -761,8 +798,10 @@ class MobileQQLikeHTTPAPITest(unittest.TestCase):
             invalid_headers["Content-Range"],
         )
 
-    def test_http_rejects_unlisted_and_invalid_credentials(self) -> None:
-        status, rejected = self.request(
+    def test_http_allows_open_registration_and_rejects_invalid_token(
+        self,
+    ) -> None:
+        status, registered = self.request(
             "/api/tools/qq-like/mobile/register",
             {
                 "qq_number": "100003",
@@ -770,8 +809,9 @@ class MobileQQLikeHTTPAPITest(unittest.TestCase):
                 "app_version": "0.1.0-test",
             },
         )
-        self.assertEqual(403, status)
-        self.assertEqual("not_allowlisted", rejected["error_code"])
+        self.assertEqual(200, status)
+        self.assertEqual("100003", registered["device"]["qq_number"])
+        self.assertTrue(registered["access_token"])
 
         status, invalid = self.request(
             "/api/tools/qq-like/mobile/heartbeat",
@@ -781,7 +821,9 @@ class MobileQQLikeHTTPAPITest(unittest.TestCase):
         self.assertEqual(401, status)
         self.assertEqual("token_invalid", invalid["error_code"])
 
-    def test_admin_mobile_overview_requires_login_and_lists_allowlist(self) -> None:
+    def test_admin_mobile_overview_requires_login_and_lists_targets(
+        self,
+    ) -> None:
         status, unauthorized = self.request(
             "/api/admin/qq-like/mobile/overview",
             method="GET",
@@ -830,7 +872,43 @@ class MobileQQLikeHTTPAPITest(unittest.TestCase):
         self.assertEqual("success", payload["status"])
         self.assertEqual(
             {"100001", "100002"},
-            {item["qq_number"] for item in payload["allowlist"]},
+            {item["qq_number"] for item in payload["targets"]},
+        )
+
+        connection = http.client.HTTPConnection(
+            "127.0.0.1",
+            self.port,
+            timeout=5,
+        )
+        try:
+            body = json.dumps(
+                {
+                    "qq_number": "100004",
+                    "display_name": "新目标",
+                    "enabled": True,
+                },
+                ensure_ascii=False,
+            ).encode("utf-8")
+            connection.request(
+                "POST",
+                "/api/admin/qq-like/mobile/targets",
+                body=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "Cookie": cookie,
+                },
+            )
+            target_response = connection.getresponse()
+            target_payload = json.loads(
+                target_response.read().decode("utf-8")
+            )
+        finally:
+            connection.close()
+        self.assertEqual(200, target_response.status)
+        self.assertEqual("新目标", target_payload["target"]["display_name"])
+        self.assertEqual(
+            {"100001", "100002", "100004"},
+            {item["qq_number"] for item in target_payload["targets"]},
         )
 
 
