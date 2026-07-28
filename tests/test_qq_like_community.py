@@ -1,5 +1,6 @@
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import app
 
@@ -14,9 +15,33 @@ class QQLikeCommunityTest(unittest.TestCase):
         self.assertIn(app.QQ_LIKE_GROUP_NAME, page)
         self.assertIn(app.QQ_LIKE_GROUP_NUMBER, page)
         self.assertLess(
+            page.index('id="qqLikeDownloadApp"'),
             page.index('id="qqLikeCommunityTitle"'),
-            page.index("<h2>发起今日互赞</h2>"),
         )
+
+    def test_qq_like_workspace_is_an_app_download_entry(self) -> None:
+        with mock.patch.object(
+            app,
+            "qq_like_mobile_release",
+            return_value={
+                "version_name": "0.1.3",
+                "size_bytes": 37_622_766,
+                "download_url": "/api/tools/qq-like/mobile/app/apk",
+            },
+        ):
+            page = app._simple_page_html()
+
+        self.assertIn("互赞功能已迁移至互赞助手 App", page)
+        self.assertIn("当前版本 0.1.3", page)
+        self.assertIn("下载互赞助手", page)
+        self.assertIn(
+            'href="/api/tools/qq-like/mobile/app/apk"',
+            page,
+        )
+        self.assertIn("适用于 Android 8.0 及以上", page)
+        self.assertIn("QQ 登录态和点赞执行仅保存在手机", page)
+        self.assertNotIn("<h2>发起今日互赞</h2>", page)
+        self.assertNotIn(">贡献 QQ 并获取资格<", page)
 
     def test_original_group_and_qq_like_group_are_independent(self) -> None:
         page = app._simple_page_html()

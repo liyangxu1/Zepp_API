@@ -15,6 +15,7 @@ import argparse
 import base64
 import hashlib
 import hmac
+import html
 import http.cookiejar
 import json
 import mimetypes
@@ -3604,6 +3605,19 @@ def classify_error(message: str) -> dict:
 
 
 def _simple_page_html() -> str:
+    qq_like_release = qq_like_mobile_release() or {}
+    qq_like_app_version = str(
+        qq_like_release.get("version_name") or "等待发布"
+    )
+    qq_like_app_size = (
+        human_file_size(int(qq_like_release.get("size_bytes") or 0))
+        if qq_like_release
+        else "安装包准备中"
+    )
+    qq_like_app_download_url = str(
+        qq_like_release.get("download_url")
+        or "/api/tools/qq-like/mobile/app/apk"
+    )
     return """<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -4327,6 +4341,190 @@ def _simple_page_html() -> str:
 
     .qq-like-titlebar p {
       margin-bottom: 0;
+    }
+
+    .qq-like-download-card {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(250px, 360px);
+      gap: 24px;
+      align-items: center;
+      padding: 24px;
+    }
+
+    .qq-like-app-summary {
+      display: grid;
+      grid-template-columns: 82px minmax(0, 1fr);
+      gap: 18px;
+      align-items: center;
+    }
+
+    .qq-like-app-icon {
+      position: relative;
+      width: 82px;
+      height: 82px;
+      display: grid;
+      place-items: center;
+      border-radius: 22px;
+      background: linear-gradient(145deg, #38bdf8, #4f46e5);
+      box-shadow: 0 14px 28px rgba(79, 70, 229, 0.22);
+    }
+
+    .qq-like-app-icon::before {
+      content: "";
+      width: 34px;
+      height: 52px;
+      border: 4px solid #fff;
+      border-radius: 8px;
+      box-sizing: border-box;
+    }
+
+    .qq-like-app-icon::after {
+      content: "";
+      position: absolute;
+      bottom: 20px;
+      width: 10px;
+      height: 3px;
+      border-radius: 999px;
+      background: #fff;
+    }
+
+    .qq-like-app-name {
+      margin: 0;
+      color: var(--text);
+      font-size: 22px;
+      line-height: 1.25;
+      font-weight: 900;
+    }
+
+    .qq-like-app-meta {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-top: 9px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .qq-like-app-version {
+      display: inline-flex;
+      align-items: center;
+      min-height: 25px;
+      padding: 2px 9px;
+      border: 1px solid #bfdbfe;
+      border-radius: 999px;
+      background: #eff6ff;
+      color: #1d4ed8;
+      font-weight: 850;
+    }
+
+    .qq-like-download-actions {
+      display: grid;
+      gap: 10px;
+      justify-items: stretch;
+    }
+
+    .qq-like-download-button {
+      min-height: 54px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      border-radius: 9px;
+      padding: 0 22px;
+      background: linear-gradient(135deg, var(--primary), #0ea5e9);
+      color: #fff;
+      text-decoration: none;
+      font-size: 17px;
+      font-weight: 900;
+      box-shadow: 0 12px 24px rgba(14, 165, 233, 0.2);
+      transition: transform 0.16s ease, box-shadow 0.16s ease;
+    }
+
+    .qq-like-download-button:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 16px 28px rgba(14, 165, 233, 0.26);
+    }
+
+    .qq-like-download-note {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.55;
+      text-align: center;
+    }
+
+    .qq-like-guide {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 0;
+      padding: 18px 20px;
+    }
+
+    .qq-like-guide-step {
+      position: relative;
+      display: grid;
+      grid-template-columns: 40px minmax(0, 1fr);
+      gap: 12px;
+      align-items: center;
+      min-width: 0;
+      padding: 0 20px;
+      border-right: 1px dashed #cbd5e1;
+    }
+
+    .qq-like-guide-step:first-child {
+      padding-left: 0;
+    }
+
+    .qq-like-guide-step:last-child {
+      padding-right: 0;
+      border-right: 0;
+    }
+
+    .qq-like-guide-number {
+      width: 40px;
+      height: 40px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #38bdf8, #3b82f6);
+      color: #fff;
+      font-size: 18px;
+      font-weight: 900;
+    }
+
+    .qq-like-guide-copy strong {
+      display: block;
+      color: var(--text);
+      font-size: 14px;
+    }
+
+    .qq-like-guide-copy span {
+      display: block;
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .qq-like-app-safety {
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+      border: 1px solid #bae6fd;
+      border-radius: 8px;
+      background: #f0f9ff;
+      padding: 12px 14px;
+      color: #075985;
+      line-height: 1.6;
+      font-size: 13px;
+    }
+
+    .qq-like-app-safety strong {
+      flex: none;
+    }
+
+    .qq-like-legacy[hidden] {
+      display: none !important;
     }
 
     .qq-like-account {
@@ -5513,6 +5711,31 @@ def _simple_page_html() -> str:
       .qq-like-record-head {
         align-items: flex-start;
       }
+      .qq-like-download-card,
+      .qq-like-app-summary {
+        grid-template-columns: 1fr;
+      }
+      .qq-like-app-icon {
+        width: 70px;
+        height: 70px;
+        border-radius: 19px;
+      }
+      .qq-like-download-actions {
+        width: 100%;
+      }
+      .qq-like-guide {
+        grid-template-columns: 1fr;
+        gap: 14px;
+      }
+      .qq-like-guide-step {
+        padding: 0 0 14px;
+        border-right: 0;
+        border-bottom: 1px dashed #cbd5e1;
+      }
+      .qq-like-guide-step:last-child {
+        padding-bottom: 0;
+        border-bottom: 0;
+      }
       .qq-like-form-grid,
       .qq-like-login-grid {
         grid-template-columns: 1fr;
@@ -5594,7 +5817,7 @@ def _simple_page_html() -> str:
       <div class="side-section-title">当前工具</div>
       <button class="category active" data-tool-shortcut="zepp-step"><span>微信步数修改</span><span class="category-count">可用</span></button>
       <button class="category" data-tool-shortcut="baidu-share"><span>网盘中转下载</span><span class="category-count">记录中</span></button>
-      <button class="category" data-tool-shortcut="qq-like"><span>QQ 互赞</span><span class="category-count">可用</span></button>
+      <button class="category" data-tool-shortcut="qq-like"><span>QQ 互赞</span><span class="category-count">下载</span></button>
     </aside>
 
     <main class="main">
@@ -5879,92 +6102,59 @@ def _simple_page_html() -> str:
 
         <section class="workspace qq-like-workspace tool-workspace" id="qqLikePanel" data-tool-workspace="qq-like">
           <div class="qq-like-shell">
-            <section class="panel">
-              <div class="qq-like-titlebar">
+            <div class="qq-like-titlebar">
+              <div>
+                <h2>QQ 互赞</h2>
+                <p>互赞功能已迁移至互赞助手 App</p>
+              </div>
+            </div>
+
+            <section class="panel qq-like-download-card">
+              <div class="qq-like-app-summary">
+                <div class="qq-like-app-icon" aria-hidden="true"></div>
                 <div>
-                  <h2>QQ 互赞</h2>
-                  <p>贡献一个可用 QQ 登录态，即可获得每日 1 次互赞资格；每次固定执行 10 次点赞。</p>
-                </div>
-                <button class="qq-like-link" type="button" id="qqLikeReload">刷新状态</button>
-              </div>
-
-              <div id="qqLikeGuest">
-                <div class="tool-notice">只有贡献 QQ 登录态的普通用户才能发起互赞。系统只调用 OneBot 点赞接口，不读取聊天记录、联系人或群消息。</div>
-                <div class="actions">
-                  <button class="primary" type="button" id="qqLikeStartLogin">贡献 QQ 并获取资格</button>
-                  <button class="ghost" type="button" id="qqLikeShowRecovery">已有贡献账号，找回管理权</button>
+                  <h3 class="qq-like-app-name">互赞助手 Android</h3>
+                  <div class="qq-like-app-meta">
+                    <span class="qq-like-app-version">当前版本 __QQ_LIKE_APP_VERSION__</span>
+                    <span>__QQ_LIKE_APP_SIZE__</span>
+                  </div>
+                  <div class="qq-like-app-meta">适用于 Android 8.0 及以上 · ARM64</div>
                 </div>
               </div>
-
-              <div id="qqLikeLogin" hidden>
-                <div class="qq-like-login-grid">
-                  <img class="qq-like-qr" id="qqLikeQrImage" alt="QQ 登录二维码" />
-                  <div class="qq-like-login-copy">
-                    <strong>使用手机 QQ 扫码登录</strong>
-                    <p id="qqLikeLoginStatus">二维码准备中，请稍候。</p>
-                    <div class="actions">
-                      <button class="ghost" type="button" id="qqLikeRefreshQr">刷新二维码</button>
-                      <button class="ghost" type="button" id="qqLikeCancelLocal">稍后再扫</button>
-                    </div>
-                  </div>
-                </div>
+              <div class="qq-like-download-actions">
+                <a class="qq-like-download-button" href="__QQ_LIKE_APP_DOWNLOAD_URL__" download="互赞助手.apk" id="qqLikeDownloadApp">下载互赞助手</a>
+                <div class="qq-like-download-note">安装后可在 App 内检查并自动下载更新</div>
               </div>
-
-              <div class="qq-like-recovery" id="qqLikeRecoveryNotice" hidden>
-                <strong>请立即保存恢复码</strong>
-                <code id="qqLikeRecoveryCode"></code>
-                恢复码只在首次创建时展示一次。它可以在更换浏览器后找回账号管理权，请勿发给他人。
-              </div>
-
-              <div class="qq-like-account" id="qqLikeAccount" hidden>
-                <div class="qq-like-account-head">
-                  <div>
-                    <div class="qq-like-account-state" id="qqLikeAccountState">贡献账号在线</div>
-                    <div class="qq-like-account-number">
-                      <strong id="qqLikeAccountNumber">未登录</strong>
-                      <span id="qqLikeAccountHealth">等待状态同步</span>
-                    </div>
-                  </div>
-                  <button class="qq-like-link" type="button" id="qqLikeManageToggle">管理账号</button>
-                </div>
-                <div class="qq-like-quota-grid">
-                  <div class="qq-like-quota">
-                    <span>今日名额</span>
-                    <strong id="qqLikeDailyTotal">1 个</strong>
-                  </div>
-                  <div class="qq-like-quota">
-                    <span>剩余名额</span>
-                    <strong id="qqLikeDailyRemaining">0 个</strong>
-                  </div>
-                  <div class="qq-like-quota">
-                    <span>排队任务</span>
-                    <strong id="qqLikeQueuedRequests">0 个</strong>
-                  </div>
-                </div>
-              </div>
-
-              <details class="qq-like-manage" id="qqLikeManage">
-                <summary>账号管理与凭证恢复</summary>
-                <div class="qq-like-manage-body">
-                  <form id="qqLikeRecoveryForm">
-                    <div class="form-row">
-                      <label>贡献账号 ID</label>
-                      <input id="qqLikeContributorId" name="contributor_id" type="text" maxlength="40" autocomplete="off" placeholder="qlc_..." />
-                    </div>
-                    <div class="form-row">
-                      <label>恢复码</label>
-                      <input id="qqLikeRecoveryInput" name="recovery_code" type="text" maxlength="20" autocomplete="off" placeholder="XXXX-XXXX-XXXX" />
-                    </div>
-                    <div class="actions">
-                      <button class="primary" type="submit" id="qqLikeRecover">找回管理权</button>
-                      <button class="ghost" type="button" id="qqLikeForgetLocal">仅清除本机凭证</button>
-                      <button class="ghost" type="button" id="qqLikeRevoke">停止贡献并删除登录信息</button>
-                    </div>
-                  </form>
-                </div>
-              </details>
-              <div class="share-status" id="qqLikeGlobalStatus">正在检查本机是否保存了贡献凭证。</div>
             </section>
+
+            <section class="panel qq-like-guide" aria-label="互赞助手使用步骤">
+              <div class="qq-like-guide-step">
+                <span class="qq-like-guide-number">1</span>
+                <div class="qq-like-guide-copy">
+                  <strong>下载并安装</strong>
+                  <span>下载互赞助手 App 并完成安装</span>
+                </div>
+              </div>
+              <div class="qq-like-guide-step">
+                <span class="qq-like-guide-number">2</span>
+                <div class="qq-like-guide-copy">
+                  <strong>扫码登录 QQ</strong>
+                  <span>在 App 内扫描二维码登录测试账号</span>
+                </div>
+              </div>
+              <div class="qq-like-guide-step">
+                <span class="qq-like-guide-number">3</span>
+                <div class="qq-like-guide-copy">
+                  <strong>点击开始互赞</strong>
+                  <span>保持 App 在前台，自动完成当日任务</span>
+                </div>
+              </div>
+            </section>
+
+            <div class="qq-like-app-safety">
+              <strong>安全提示</strong>
+              <span>QQ 登录态和点赞执行仅保存在手机，工具网只负责互赞任务调度，不接收 QQ Cookie、扫码数据、OneBot token 或聊天记录。</span>
+            </div>
 
             <section class="panel qq-like-community" aria-labelledby="qqLikeCommunityTitle">
               <div class="qq-like-community-head">
@@ -5994,76 +6184,44 @@ def _simple_page_html() -> str:
               </div>
             </section>
 
-            <section class="panel">
-              <h2>发起今日互赞</h2>
-              <p>系统会自动选择另一台当天仍有额度的贡献账号执行，同一来源账号每天只执行一次互赞任务。</p>
+            <div class="qq-like-legacy" hidden aria-hidden="true">
+              <button type="button" id="qqLikeReload"></button>
+              <div id="qqLikeGuest">
+                <button type="button" id="qqLikeStartLogin"></button>
+                <button type="button" id="qqLikeShowRecovery"></button>
+              </div>
+              <div id="qqLikeLogin" hidden>
+                <img id="qqLikeQrImage" alt="" />
+                <p id="qqLikeLoginStatus"></p>
+                <button type="button" id="qqLikeRefreshQr"></button>
+                <button type="button" id="qqLikeCancelLocal"></button>
+              </div>
+              <div id="qqLikeRecoveryNotice" hidden><code id="qqLikeRecoveryCode"></code></div>
+              <div id="qqLikeAccount" hidden>
+                <div id="qqLikeAccountState"></div>
+                <strong id="qqLikeAccountNumber"></strong>
+                <span id="qqLikeAccountHealth"></span>
+                <strong id="qqLikeDailyTotal"></strong>
+                <strong id="qqLikeDailyRemaining"></strong>
+                <strong id="qqLikeQueuedRequests"></strong>
+                <button type="button" id="qqLikeManageToggle"></button>
+              </div>
+              <details id="qqLikeManage">
+                <form id="qqLikeRecoveryForm">
+                  <input id="qqLikeContributorId" />
+                  <input id="qqLikeRecoveryInput" />
+                  <button type="submit" id="qqLikeRecover"></button>
+                  <button type="button" id="qqLikeForgetLocal"></button>
+                  <button type="button" id="qqLikeRevoke"></button>
+                </form>
+              </details>
+              <div id="qqLikeGlobalStatus"></div>
               <form id="qqLikeRequestForm">
-                <div class="qq-like-form-grid">
-                  <div class="form-row">
-                    <label>目标 QQ 号</label>
-                    <input id="qqLikeTarget" name="target_qq" type="text" inputmode="numeric" pattern="[1-9][0-9]{4,11}" maxlength="12" autocomplete="off" placeholder="请输入要点赞的 QQ 号" />
-                  </div>
-                  <button class="primary" type="submit" id="qqLikeSubmit" disabled>加入互赞队列</button>
-                </div>
-                <div class="field-hint">固定执行 10 次点赞；任务结果不明确时不会自动重复发送，避免对同一目标重复点赞。</div>
+                <input id="qqLikeTarget" />
+                <button type="submit" id="qqLikeSubmit" disabled></button>
               </form>
-            </section>
-
-            <section class="panel">
-              <h2>当前任务状态</h2>
-              <p id="qqLikeTaskSummary">尚未提交今日互赞任务。</p>
-              <div class="qq-like-task" id="qqLikeTaskSteps">
-                <div class="qq-like-task-step" data-qq-like-step="submitted">
-                  <div class="qq-like-task-node">1</div>
-                  <strong>已提交</strong>
-                  <span>—</span>
-                </div>
-                <div class="qq-like-task-step" data-qq-like-step="assigned">
-                  <div class="qq-like-task-node">2</div>
-                  <strong>等待可用账号</strong>
-                  <span>—</span>
-                </div>
-                <div class="qq-like-task-step" data-qq-like-step="running">
-                  <div class="qq-like-task-node">3</div>
-                  <strong>执行点赞</strong>
-                  <span>—</span>
-                </div>
-                <div class="qq-like-task-step" data-qq-like-step="finished">
-                  <div class="qq-like-task-node">4</div>
-                  <strong>完成</strong>
-                  <span>—</span>
-                </div>
-              </div>
-            </section>
-
-            <section class="panel">
-              <div class="qq-like-record-head">
-                <div>
-                  <h2>今日记录</h2>
-                  <p>只展示当前贡献账号发起的任务，来源 QQ 会脱敏。</p>
-                </div>
-              </div>
-              <div class="qq-like-table-wrap">
-                <table class="qq-like-table">
-                  <thead>
-                    <tr>
-                      <th>目标 QQ</th>
-                      <th>来源账号</th>
-                      <th>次数</th>
-                      <th>状态</th>
-                      <th>时间</th>
-                    </tr>
-                  </thead>
-                  <tbody id="qqLikeRecords">
-                    <tr><td colspan="5">暂无互赞记录</td></tr>
-                  </tbody>
-                </table>
-              </div>
-            </section>
-
-            <div class="qq-like-safety">
-              <strong>安全说明</strong>
-              <span>扫码贡献即表示允许系统仅使用该登录态执行 QQ 点赞。服务不会接入消息事件，也不会读取聊天、联系人或群数据；可随时在账号管理中停止贡献并删除本工具保存的登录信息。</span>
+              <p id="qqLikeTaskSummary"></p>
+              <table><tbody id="qqLikeRecords"></tbody></table>
             </div>
           </div>
         </section>
@@ -6176,9 +6334,9 @@ def _simple_page_html() -> str:
         id: 'qq-like',
         category: 'qq',
         title: 'QQ 互赞',
-        badge: '可用',
-        purpose: '贡献一个 QQ，获得每日互赞资格',
-        desc: '使用独立 QQ 登录态互助点赞；普通用户需先贡献账号，每次固定执行 10 次点赞。',
+        badge: 'App 下载',
+        purpose: '下载互赞助手，在手机端登录并完成互赞',
+        desc: 'QQ 登录态和点赞执行均留在手机，工具网只负责互赞任务调度。',
         active: true,
       },
       {
@@ -6540,7 +6698,6 @@ def _simple_page_html() -> str:
 
     function showQQLikePanel() {
       setActiveTool('qq-like')
-      loadQQLikeDashboard()
     }
 
     const qqLikeAccessTokenKey = 'qqLikeAccessToken:v1'
@@ -7982,7 +8139,14 @@ def _simple_page_html() -> str:
   </script>
 </body>
 </html>
-""".replace("__ZEPP_TOOL_API_KEY__", json.dumps(TOOL_API_KEY)).replace(
+""".replace(
+    "__QQ_LIKE_APP_VERSION__", html.escape(qq_like_app_version)
+).replace(
+    "__QQ_LIKE_APP_SIZE__", html.escape(qq_like_app_size)
+).replace(
+    "__QQ_LIKE_APP_DOWNLOAD_URL__",
+    html.escape(qq_like_app_download_url, quote=True),
+).replace("__ZEPP_TOOL_API_KEY__", json.dumps(TOOL_API_KEY)).replace(
     "__QQ_GROUP_NAME_JSON__", json.dumps(QQ_GROUP_NAME)
 ).replace(
     "__QQ_GROUP_NUMBER_JSON__", json.dumps(QQ_GROUP_NUMBER)
