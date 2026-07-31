@@ -145,11 +145,20 @@ class MobileQQLikeService:
             result_code=result_code,
             result_message=result_message,
         )
+        summary = self.store.daily_summary(str(account["id"]))
+        pool_membership = None
+        if not bool(task.get("idempotent")) and summary["pending"] == 0:
+            pool_membership = (
+                self.store.refresh_pool_membership_if_complete(
+                    str(account["id"])
+                )
+            )
         return {
             "status": "success",
             "task": task,
             "business_date": self.store.business_date(),
-            "tasks": self.store.daily_summary(str(account["id"])),
+            "tasks": summary,
+            "pool_membership": pool_membership,
         }
 
     def admin_overview(self) -> Dict[str, Any]:

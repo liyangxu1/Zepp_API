@@ -24,6 +24,7 @@ MOBILE_TASK_STATUSES = {
     "uncertain",
 }
 MOBILE_FINAL_TASK_STATUSES = {"succeeded", "failed", "uncertain"}
+MOBILE_POOL_RETENTION_DAYS = 3
 
 
 class MobileQQLikeStoreError(ValueError):
@@ -188,6 +189,14 @@ class MobileQQLikeStore:
                     CHECK (requested_times BETWEEN 1 AND 10)
                 );
 
+                CREATE TABLE IF NOT EXISTS qq_like_mobile_pool_memberships (
+                    account_id TEXT PRIMARY KEY,
+                    refreshed_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    FOREIGN KEY (account_id)
+                        REFERENCES qq_like_mobile_accounts(id)
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_qq_like_mobile_task_lease
                 ON qq_like_mobile_tasks(
                     source_account_id, business_date, status, created_at
@@ -202,6 +211,9 @@ class MobileQQLikeStore:
                 CREATE UNIQUE INDEX IF NOT EXISTS uq_qq_like_mobile_result_key
                 ON qq_like_mobile_tasks(result_idempotency_hash)
                 WHERE result_idempotency_hash IS NOT NULL;
+
+                CREATE INDEX IF NOT EXISTS idx_qq_like_mobile_pool_expiry
+                ON qq_like_mobile_pool_memberships(expires_at);
                 """
             )
             # 兼容早期测试库，正式部署无需人工迁移。
@@ -593,22 +605,35 @@ class MobileQQLikeStore:
             """
             SELECT target.id
             FROM qq_like_mobile_accounts AS target
-            JOIN qq_like_mobile_allowlist AS allowlist
+            LEFT JOIN qq_like_mobile_allowlist AS allowlist
               ON allowlist.qq_number = target.qq_number
-             AND allowlist.enabled = 1
+            LEFT JOIN qq_like_mobile_pool_memberships AS pool
+              ON pool.account_id = target.id
             LEFT JOIN qq_like_mobile_tasks AS task
               ON task.source_account_id = ?
              AND task.target_account_id = target.id
              AND task.business_date = ?
             WHERE target.id != ?
+              AND (
+                    allowlist.enabled = 1
+                    OR (
+                        allowlist.qq_number IS NULL
+                        AND pool.expires_at > ?
+                        AND target.target_only = 0
+                        AND target.opted_in = 1
+                        AND target.binding_reset_pending = 0
+                    )
+              )
               AND task.id IS NULL
-            ORDER BY allowlist.created_at ASC, target.id ASC
+            ORDER BY COALESCE(allowlist.created_at, pool.refreshed_at) ASC,
+                     target.id ASC
             LIMIT ?
             """,
             (
                 source_account_id,
                 business_date,
                 source_account_id,
+                now_text,
                 remaining,
             ),
         ).fetchall()
@@ -732,17 +757,26 @@ class MobileQQLikeStore:
                 (account_id, business_date, safe_limit),
             ).fetchall()
             if not queued_rows:
+                summary = self._daily_summary_locked(
+                    conn,
+                    account_id=account_id,
+                    business_date=business_date,
+                )
+                pool_membership = None
+                if summary["pending"] == 0:
+                    pool_membership = self._refresh_pool_membership_locked(
+                        conn,
+                        account_id=account_id,
+                        now=now,
+                    )
                 return {
                     "business_date": business_date,
                     "lease_token": "",
                     "lease_expires_at": "",
                     "tasks": [],
                     "reused": False,
-                    "summary": self._daily_summary_locked(
-                        conn,
-                        account_id=account_id,
-                        business_date=business_date,
-                    ),
+                    "summary": summary,
+                    "pool_membership": pool_membership,
                 }
 
             lease_id = f"qlml_{uuid.uuid4().hex}"
@@ -933,17 +967,29 @@ class MobileQQLikeStore:
         counts = {status: 0 for status in MOBILE_TASK_STATUSES}
         for row in rows:
             counts[str(row["status"])] = int(row["count"])
+        now_text = self._now_text()
         eligible_targets = int(
             conn.execute(
                 """
                 SELECT COUNT(*)
                 FROM qq_like_mobile_accounts AS target
-                JOIN qq_like_mobile_allowlist AS allowlist
+                LEFT JOIN qq_like_mobile_allowlist AS allowlist
                   ON allowlist.qq_number = target.qq_number
-                 AND allowlist.enabled = 1
+                LEFT JOIN qq_like_mobile_pool_memberships AS pool
+                  ON pool.account_id = target.id
                 WHERE target.id != ?
+                  AND (
+                        allowlist.enabled = 1
+                        OR (
+                            allowlist.qq_number IS NULL
+                            AND pool.expires_at > ?
+                            AND target.target_only = 0
+                            AND target.opted_in = 1
+                            AND target.binding_reset_pending = 0
+                        )
+                  )
                 """,
-                (account_id,),
+                (account_id, now_text),
             ).fetchone()[0]
         )
         materialized = sum(counts.values())
@@ -956,6 +1002,76 @@ class MobileQQLikeStore:
         counts["eligible_targets"] = eligible_targets
         counts["total"] = max(materialized, eligible_targets)
         return counts
+
+    def _refresh_pool_membership_locked(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        account_id: str,
+        now: datetime,
+    ) -> Dict[str, object]:
+        """完成互赞后刷新三天被点赞资格。"""
+
+        account = conn.execute(
+            """
+            SELECT id
+            FROM qq_like_mobile_accounts
+            WHERE id = ? AND target_only = 0 AND opted_in = 1
+              AND binding_reset_pending = 0
+            """,
+            (account_id,),
+        ).fetchone()
+        if account is None:
+            raise MobileQQLikeStoreError(
+                "互赞账号不存在或已被停用",
+                http_status=403,
+                error_code="account_inactive",
+            )
+        refreshed_at = self._time_text(now)
+        expires_at = self._time_text(
+            now + timedelta(days=MOBILE_POOL_RETENTION_DAYS)
+        )
+        conn.execute(
+            """
+            INSERT INTO qq_like_mobile_pool_memberships (
+                account_id, refreshed_at, expires_at
+            ) VALUES (?, ?, ?)
+            ON CONFLICT(account_id) DO UPDATE SET
+                refreshed_at = excluded.refreshed_at,
+                expires_at = excluded.expires_at
+            """,
+            (account_id, refreshed_at, expires_at),
+        )
+        return {
+            "active": True,
+            "refreshed_at": refreshed_at,
+            "expires_at": expires_at,
+            "retention_days": MOBILE_POOL_RETENTION_DAYS,
+        }
+
+    def refresh_pool_membership_if_complete(
+        self,
+        account_id: str,
+    ) -> Optional[Dict[str, object]]:
+        """仅在当天没有未完成目标时刷新被点赞资格。"""
+
+        self.init_schema()
+        now = self._now()
+        business_date = now.strftime("%Y-%m-%d")
+        with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            summary = self._daily_summary_locked(
+                conn,
+                account_id=account_id,
+                business_date=business_date,
+            )
+            if summary["pending"] != 0:
+                return None
+            return self._refresh_pool_membership_locked(
+                conn,
+                account_id=account_id,
+                now=now,
+            )
 
     def daily_summary(self, account_id: str) -> Dict[str, int]:
         self.init_schema()
@@ -1063,8 +1179,11 @@ class MobileQQLikeStore:
                        account.active_business_date, account.last_seen_at,
                        account.created_at, account.updated_at,
                        account.install_id_hash, account.binding_reset_pending,
-                       account.opted_in
+                       account.opted_in, pool.refreshed_at AS pool_refreshed_at,
+                       pool.expires_at AS pool_expires_at
                 FROM qq_like_mobile_accounts AS account
+                LEFT JOIN qq_like_mobile_pool_memberships AS pool
+                  ON pool.account_id = account.id
                 WHERE account.target_only = 0
                 ORDER BY account.last_seen_at DESC, account.qq_number ASC
                 """
@@ -1111,6 +1230,7 @@ class MobileQQLikeStore:
             item["enabled"] = bool(item["enabled"])
             target_payload.append(item)
         account_payload = []
+        now_text = self._now_text()
         for row in account_rows:
             item = dict(row)
             item["active_today"] = (
@@ -1123,8 +1243,24 @@ class MobileQQLikeStore:
                 item["binding_reset_pending"]
             )
             item["opted_in"] = bool(item["opted_in"])
+            item["in_like_pool"] = (
+                bool(item["opted_in"])
+                and not bool(item["binding_reset_pending"])
+                and bool(item["pool_expires_at"])
+                and str(item["pool_expires_at"]) > now_text
+            )
             item.pop("install_id_hash", None)
             account_payload.append(item)
+        target_qq_numbers = {
+            str(item["qq_number"])
+            for item in target_payload
+            if item["enabled"]
+        }
+        target_qq_numbers.update(
+            str(item["qq_number"])
+            for item in account_payload
+            if item["in_like_pool"]
+        )
         summary = {
             **status_counts,
             "pending": status_counts["queued"] + status_counts["leased"],
@@ -1132,14 +1268,24 @@ class MobileQQLikeStore:
             "active_accounts": sum(
                 1 for item in account_payload if item["active_today"]
             ),
-            "target_accounts": sum(
-                1 for item in target_payload if item["enabled"]
+            "target_accounts": len(target_qq_numbers),
+            "pool_accounts": sum(
+                1 for item in account_payload if item["in_like_pool"]
             ),
         }
         return {
             "business_date": business_date,
             "summary": summary,
             "targets": target_payload,
+            "pool_memberships": [
+                {
+                    "qq_number": item["qq_number"],
+                    "refreshed_at": item["pool_refreshed_at"],
+                    "expires_at": item["pool_expires_at"],
+                }
+                for item in account_payload
+                if item["in_like_pool"]
+            ],
             "accounts": account_payload,
             "tasks": [dict(row) for row in task_rows],
         }

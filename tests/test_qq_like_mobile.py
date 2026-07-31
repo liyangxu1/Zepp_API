@@ -194,6 +194,103 @@ class MobileQQLikeTest(unittest.TestCase):
             self.service.admin_overview()["targets"][0]["display_name"],
         )
 
+    def test_completed_account_enters_pool_and_can_be_liked(self) -> None:
+        source = self.register("100001", add_target=False)
+        other = self.register("100002", add_target=False)
+        self.store.upsert_target("900001", display_name="固定测试目标")
+
+        first = self.service.lease(source["access_token"])["tasks"][0]
+        while_incomplete = self.service.lease(other["access_token"])
+        self.assertNotIn(
+            "100001",
+            {task["target_qq"] for task in while_incomplete["tasks"]},
+        )
+
+        completed = self.service.result(
+            source["access_token"],
+            task_id=first["id"],
+            lease_token=first["lease_token"],
+            outcome="succeeded",
+            idempotency_key="complete-and-join-pool",
+        )
+        self.assertTrue(completed["pool_membership"]["active"])
+        self.assertEqual(
+            "2026-07-31 10:00:00",
+            completed["pool_membership"]["expires_at"],
+        )
+
+        fixed = while_incomplete["tasks"][0]
+        self.service.result(
+            other["access_token"],
+            task_id=fixed["id"],
+            lease_token=fixed["lease_token"],
+            outcome="succeeded",
+            idempotency_key="other-finishes-fixed-target",
+        )
+        later = self.service.lease(other["access_token"])
+        self.assertEqual(
+            ["100001"],
+            [task["target_qq"] for task in later["tasks"]],
+        )
+
+    def test_empty_execution_refreshes_pool_but_idempotent_result_does_not(
+        self,
+    ) -> None:
+        source = self.register("100001", add_target=False)
+        self.store.upsert_target("900001", display_name="固定测试目标")
+        task = self.service.lease(source["access_token"])["tasks"][0]
+        payload = {
+            "task_id": task["id"],
+            "lease_token": task["lease_token"],
+            "outcome": "succeeded",
+            "idempotency_key": "first-completion",
+        }
+        completed = self.service.result(source["access_token"], **payload)
+        self.assertEqual(
+            "2026-07-31 10:00:00",
+            completed["pool_membership"]["expires_at"],
+        )
+
+        self.now += timedelta(hours=1)
+        repeated = self.service.result(source["access_token"], **payload)
+        self.assertIsNone(repeated["pool_membership"])
+        overview = self.service.admin_overview()
+        self.assertEqual(
+            "2026-07-31 10:00:00",
+            overview["pool_memberships"][0]["expires_at"],
+        )
+
+        refreshed = self.service.lease(source["access_token"])
+        self.assertEqual([], refreshed["tasks"])
+        self.assertEqual(
+            "2026-07-31 11:00:00",
+            refreshed["pool_membership"]["expires_at"],
+        )
+
+    def test_pool_membership_expires_after_three_days(self) -> None:
+        source = self.register("100001", add_target=False)
+        other = self.register("100002", add_target=False)
+        self.store.upsert_target("900001", display_name="固定测试目标")
+        task = self.service.lease(source["access_token"])["tasks"][0]
+        self.service.result(
+            source["access_token"],
+            task_id=task["id"],
+            lease_token=task["lease_token"],
+            outcome="failed",
+            idempotency_key="failed-still-counts-as-completed",
+        )
+
+        self.now += timedelta(days=3)
+        self.service.heartbeat(other["access_token"])
+        leased = self.service.lease(other["access_token"])
+        self.assertNotIn(
+            "100001",
+            {item["target_qq"] for item in leased["tasks"]},
+        )
+        overview = self.service.admin_overview()
+        self.assertEqual([], overview["pool_memberships"])
+        self.assertEqual(0, overview["summary"]["pool_accounts"])
+
     def test_daily_directional_tasks_exclude_self_and_are_unique(self) -> None:
         one = self.register("100001")
         two = self.register("100002")
